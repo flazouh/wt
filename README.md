@@ -25,6 +25,8 @@ wt drop 3                 # remove one for good
 wt pin 2                  # never recycle this one
 wt strays                 # worktrees created outside the pool
 wt strays --apply         # remove the ones that are safe to remove
+wt strays --archive       # what preserving their work would free
+wt strays --archive --apply
 wt enforce --install      # make the cap binding
 ```
 
@@ -49,6 +51,39 @@ The third question is subtler than it looks. Comparing against remotes alone
 means a repository with no remote configured has every commit unreachable from
 one, so every worktree reads as protected and the pool wedges at five for good.
 It compares against every other ref instead.
+
+## Archiving
+
+Of the forty-seven strays in the repository this was built for, thirty-two were
+held by one question and one only: commits that exist on no other ref. Mostly
+abandoned Codex runs, sixteen hours to five weeks old. Not worth a worktree
+each, not worth destroying either — and those are not the only two answers.
+
+`wt strays --archive` pushes each of those branches to `refs/archive/<branch>`
+on origin, checks the remote really holds it, and only then reclaims the
+directory. The blocker is answered rather than overridden, so nothing in this
+mode passes a `--force` to anything.
+
+`refs/archive/` rather than `archive/`, which would be `refs/heads/archive/` —
+a real branch, in `git branch -r`, in the GitHub branch list, in every
+base-branch picker, and fetched into every clone by the default refspec. Thirty
+two of them would be thirty-two entries in a list people read to find something
+else. Outside `refs/heads` it is none of those things; the price is that getting
+one back is an explicit fetch, which the command prints:
+
+```sh
+git fetch origin refs/archive/<branch>:refs/archive/<branch>
+```
+
+The push also writes the ref locally. That is not bookkeeping: the unpushed
+check asks whether any ref *in this repository* holds the commits, so a ref that
+exists only on the remote would leave the worktree protected — archived, and
+then refused. The local write happens last, so a failure anywhere earlier leaves
+the worktree exactly where it was.
+
+The other two questions are untouched. A live process or uncommitted changes
+still refuse, whatever flags are passed, and a push that fails leaves its own
+worktree alone without stopping the rest of the sweep.
 
 ## Enforcement
 

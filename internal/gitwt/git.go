@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -114,21 +115,34 @@ func (g *Git) Dirty(path string) (bool, error) {
 // a branch cut from main with nothing new on it is fully contained in main, and
 // losing it costs nothing.
 func (g *Git) Unpushed(path string) (bool, error) {
+	count, err := g.UniqueCommits(path)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+// UniqueCommits counts the commits a worktree holds that exist on no other ref.
+//
+// Unpushed is this same question asked as a yes or no. The count itself is what
+// a person triaging abandoned work reads: one commit is a checkpoint nobody
+// will miss, forty is a feature somebody should look at before it is forgotten.
+func (g *Git) UniqueCommits(path string) (int, error) {
 	if path == "" {
-		return false, nil
+		return 0, nil
 	}
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return false, nil
+		return 0, nil
 	}
 	branch, err := g.run(path, "rev-parse", "--abbrev-ref", "HEAD")
 	if err != nil {
-		return false, err
+		return 0, err
 	}
 	mine := "refs/heads/" + strings.TrimSpace(branch)
 
 	refs, err := g.run(path, "for-each-ref", "--format=%(refname)")
 	if err != nil {
-		return false, err
+		return 0, err
 	}
 
 	// `--exclude=<pattern> --all` looks like the way to say this and is not:
@@ -152,9 +166,13 @@ func (g *Git) Unpushed(path string) (bool, error) {
 
 	out, err := g.runStdin(path, revs.String(), "rev-list", "--count", "--stdin")
 	if err != nil {
-		return false, err
+		return 0, err
 	}
-	return strings.TrimSpace(out) != "0", nil
+	count, err := strconv.Atoi(strings.TrimSpace(out))
+	if err != nil {
+		return 0, fmt.Errorf("counting unique commits in %s: %w", path, err)
+	}
+	return count, nil
 }
 
 // runStdin is run with input, for the commands that take a ref list.

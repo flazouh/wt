@@ -58,11 +58,13 @@ func init() {
 	commands["strays"] = command{
 		name:    "strays",
 		summary: "List worktrees the pool did not create, and reclaim them",
-		usage:   "wt strays [--apply]",
-		flags:   map[string]flagKind{"apply": boolFlag},
+		usage:   "wt strays [--archive] [--apply]",
+		flags:   map[string]flagKind{"apply": boolFlag, "archive": boolFlag},
 		examples: []string{
 			`wt strays`,
 			`wt strays --apply`,
+			`wt strays --archive`,
+			`wt strays --archive --apply`,
 		},
 		run: strays,
 	}

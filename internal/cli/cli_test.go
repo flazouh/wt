@@ -140,3 +140,30 @@ func TestAValueFlagWithNoValueIsAnError(t *testing.T) {
 		t.Fatal("--owner with no value was accepted")
 	}
 }
+
+func TestArchiveIsAFlagStraysKnowsAbout(t *testing.T) {
+	flags, _, err := parse([]string{"--archive", "--apply"}, commands["strays"].flags)
+	if err != nil {
+		t.Fatalf("strays --archive --apply: %v", err)
+	}
+	for _, name := range []string{"archive", "apply"} {
+		if flags[name] != "true" {
+			t.Errorf("--%s did not survive parsing: %v", name, flags)
+		}
+	}
+}
+
+// The two modes are not opposites, so both must be reachable from the one
+// error an agent is most likely to see first.
+func TestStraysHelpOffersBothSweeps(t *testing.T) {
+	out, code := run(t, "strays", "--help")
+
+	if code != OK {
+		t.Fatalf("exit %d", code)
+	}
+	for _, want := range []string{"--apply", "--archive"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("help omits %s: %q", want, out)
+		}
+	}
+}

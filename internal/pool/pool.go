@@ -34,27 +34,59 @@ type Safety interface {
 	Unpushed(path string) (bool, error)
 }
 
-// Unsafe names the first reason a slot must be left alone, or empty if none.
-func Unsafe(s Safety, path string) (string, error) {
+// Reason is why a worktree must be left alone. It is a named type rather than a
+// bare string so a caller can tell which question answered yes without matching
+// on prose: the archive sweep acts on one of these three and not the others.
+type Reason string
+
+const (
+	// Safe: nothing stands in the way of removal.
+	Safe Reason = ""
+	// ReasonInUse: a live process is sitting in it.
+	ReasonInUse Reason = "a process is working in it"
+	// ReasonDirty: it has uncommitted changes.
+	ReasonDirty Reason = "it has uncommitted changes"
+	// ReasonUnpushed: it holds commits that exist on no other ref.
+	ReasonUnpushed Reason = "it holds commits that are not pushed"
+)
+
+// Unsafe names the first reason a slot must be left alone, or Safe if none.
+//
+// The order of the questions is load-bearing rather than cosmetic. The two
+// blockers nobody can answer on the worktree's behalf — something is running in
+// there, someone has edits they never committed — are asked before the one that
+// can be answered, so a ReasonUnpushed verdict carries the other two answers
+// with it: nothing is running, nothing is uncommitted. Archivable leans on
+// exactly that.
+func Unsafe(s Safety, path string) (Reason, error) {
 	checks := []struct {
-		reason string
+		reason Reason
 		ask    func(string) (bool, error)
 	}{
-		{"a process is working in it", s.InUse},
-		{"it has uncommitted changes", s.Dirty},
-		{"it holds commits that are not pushed", s.Unpushed},
+		{ReasonInUse, s.InUse},
+		{ReasonDirty, s.Dirty},
+		{ReasonUnpushed, s.Unpushed},
 	}
 	for _, check := range checks {
 		yes, err := check.ask(path)
 		if err != nil {
-			return "", fmt.Errorf("checking whether %s: %w", check.reason, err)
+			return Safe, fmt.Errorf("checking whether %s: %w", check.reason, err)
 		}
 		if yes {
 			return check.reason, nil
 		}
 	}
-	return "", nil
+	return Safe, nil
 }
+
+// Archivable reports whether the only thing standing between a worktree and
+// removal is work that exists nowhere else.
+//
+// That is the one blocker with an answer rather than a wait: commits can be put
+// somewhere durable, and then they are no longer the only copy. A live process
+// and uncommitted edits cannot be resolved on the worktree's behalf, which is
+// why they stay refusals however old the directory is.
+func Archivable(r Reason) bool { return r == ReasonUnpushed }
 
 // Pool is the set of slots belonging to one repository.
 type Pool struct {
