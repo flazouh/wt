@@ -8,10 +8,10 @@ import "time"
 
 // Limit is how many worktrees one repository may have at once.
 //
-// Five, because that is the number Alex asked for, and because the cost of a
-// worktree here is real: the fluentai worktrees averaged 850 MB each and forty
-// eight of them blocked three TestFlight releases in one afternoon by leaving
-// the machine under the twelve gigabyte floor the build needs.
+// Five, because the cost of a worktree is real. The forty-eight that prompted
+// this tool averaged 850 MB each, and together they blocked three releases in
+// one afternoon by holding the machine under the twelve gigabyte floor the
+// build needs.
 const Limit = 5
 
 // State is what a slot is doing, which decides what may be done to it.
