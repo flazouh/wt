@@ -16,7 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/alexdepape/wt/internal/gitwt"
+	"github.com/flazouh/wt/internal/gitwt"
 )
 
 // Script is the shim, with %s replaced by the resolved real git.

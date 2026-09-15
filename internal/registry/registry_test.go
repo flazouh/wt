@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/alexdepape/wt/internal/pool"
+	"github.com/flazouh/wt/internal/pool"
 )
 
 func store(t *testing.T) *Store {

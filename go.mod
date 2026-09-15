@@ -1,4 +1,4 @@
-module github.com/alexdepape/wt
+module github.com/flazouh/wt
 
 go 1.26.0
 

@@ -16,7 +16,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/alexdepape/wt/internal/pool"
+	"github.com/flazouh/wt/internal/pool"
 )
 
 // Registry is every pool on the machine, keyed by the main checkout's path.

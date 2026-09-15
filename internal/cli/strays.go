@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/alexdepape/wt/internal/gitwt"
-	"github.com/alexdepape/wt/internal/pool"
-	"github.com/alexdepape/wt/internal/toon"
+	"github.com/flazouh/wt/internal/gitwt"
+	"github.com/flazouh/wt/internal/pool"
+	"github.com/flazouh/wt/internal/toon"
 )
 
 // strays lists worktrees the pool never created and, with --apply, reclaims the

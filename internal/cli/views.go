@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alexdepape/wt/internal/pool"
-	"github.com/alexdepape/wt/internal/shim"
-	"github.com/alexdepape/wt/internal/toon"
+	"github.com/flazouh/wt/internal/pool"
+	"github.com/flazouh/wt/internal/shim"
+	"github.com/flazouh/wt/internal/toon"
 )
 
 // home is what `wt` with no arguments prints: the live pool for the repository

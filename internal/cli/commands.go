@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alexdepape/wt/internal/gitwt"
-	"github.com/alexdepape/wt/internal/liveness"
-	"github.com/alexdepape/wt/internal/pool"
-	"github.com/alexdepape/wt/internal/registry"
-	"github.com/alexdepape/wt/internal/toon"
+	"github.com/flazouh/wt/internal/gitwt"
+	"github.com/flazouh/wt/internal/liveness"
+	"github.com/flazouh/wt/internal/pool"
+	"github.com/flazouh/wt/internal/registry"
+	"github.com/flazouh/wt/internal/toon"
 )
 
 var commands = map[string]command{}

@@ -7,7 +7,7 @@ package main
 import (
 	"os"
 
-	"github.com/alexdepape/wt/internal/cli"
+	"github.com/flazouh/wt/internal/cli"
 )
 
 func main() {

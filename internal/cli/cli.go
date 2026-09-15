@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/alexdepape/wt/internal/toon"
+	"github.com/flazouh/wt/internal/toon"
 )
 
 // Version is the tool's version. It lives here, away from anything that opens a
