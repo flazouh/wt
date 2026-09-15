@@ -113,7 +113,7 @@ func open() (*session, error) {
 		svc: &pool.Service{
 			Pool:   p,
 			Git:    adapter{g},
-			Safety: safety{g, liveness.New()},
+			Safety: safety{g, liveness.New(), gitwt.NewMerged()},
 			Root:   poolRoot(g.Repo),
 			Now:    time.Now,
 		},
@@ -146,16 +146,32 @@ func (a adapter) List() ([]pool.Tree, error) {
 	return out, nil
 }
 
-// safety joins the two sources of truth about whether a worktree may be
-// destroyed: the machine's process table and the repository itself.
+// safety joins the sources of truth about whether a worktree may be destroyed:
+// the machine's process table, the repository, and the pull requests.
 type safety struct {
-	g     *gitwt.Git
-	probe *liveness.Probe
+	g      *gitwt.Git
+	probe  *liveness.Probe
+	merged *gitwt.Merged
 }
 
-func (s safety) InUse(path string) (bool, error)    { return s.probe.InUse(path) }
-func (s safety) Dirty(path string) (bool, error)    { return s.g.Dirty(path) }
-func (s safety) Unpushed(path string) (bool, error) { return s.g.Unpushed(path) }
+func (s safety) InUse(path string) (bool, error) { return s.probe.InUse(path) }
+func (s safety) Dirty(path string) (bool, error) { return s.g.Dirty(path) }
+
+// Unpushed asks git, then forgives the one case git cannot see.
+//
+// A squash-merged branch has commits that exist on no other ref, because the
+// squash rewrote them into a single new commit. Reachability says the work is
+// unique; the pull request says it is in main. The pull request is right.
+func (s safety) Unpushed(path string) (bool, error) {
+	unpushed, err := s.g.Unpushed(path)
+	if err != nil || !unpushed {
+		return unpushed, err
+	}
+	if s.merged.Is(s.g.Branch(path)) {
+		return false, nil
+	}
+	return true, nil
+}
 
 func take(w io.Writer, flags map[string]string, rest []string) int {
 	if len(rest) == 0 {
