@@ -93,6 +93,15 @@ exists only on the remote would leave the worktree protected — archived, and
 then refused. The local write happens last, so a failure anywhere earlier leaves
 the worktree exactly where it was.
 
+The push passes `--no-verify`. A pre-push hook is a gate on contributions, and
+an archive is not one: it lands outside `refs/heads`, no CI watches it, nothing
+builds from it, and it is by definition work somebody abandoned unfinished — so
+the gate fails on most of it, and each failure would keep the worktree it was
+meant to free. The repository this was built for runs its whole affected test
+suite on pre-push; twenty-one archives would have been twenty-one test runs and
+twenty-one worktrees kept. None of the three safety questions are skipped, and
+the remote is still read back afterwards.
+
 The other two questions are untouched. A live process or uncommitted changes
 still refuse, whatever flags are passed, and a push that fails leaves its own
 worktree alone without stopping the rest of the sweep.

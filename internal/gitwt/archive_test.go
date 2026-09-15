@@ -280,3 +280,40 @@ func TestReclaimCommandFetchesTheRefBackUnderItsOwnName(t *testing.T) {
 		t.Errorf("reclaim command %q, want %q", got, want)
 	}
 }
+
+// A pre-push hook is a gate on contributions. An archive is not one: it lands
+// outside refs/heads, nothing builds from it, and it is by definition work that
+// was abandoned unfinished, so the gate would fail on most of it and keep every
+// worktree it was meant to free.
+//
+// This is the test that would have caught it. The first real run against a
+// repository with a lefthook pre-push ran the entire affected test suite for
+// one archive, and would have done it twenty-one times.
+func TestArchiveIsNotStoppedByAPrePushHook(t *testing.T) {
+	g, dir := repo(t)
+	bare := origin(t, g, dir)
+	work := abandoned(t, g, "codex/hooked", 1)
+
+	hooks := filepath.Join(dir, ".git", "hooks")
+	if err := os.MkdirAll(hooks, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hooks, "pre-push"),
+		[]byte("#!/bin/sh\necho 'the test suite failed' >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// The hook is real: a plain push must still be refused by it, or this test
+	// would pass against a repository where nothing was installed.
+	if _, err := g.run(work, "push", "origin", "codex/hooked"); err == nil {
+		t.Fatal("the pre-push hook did not refuse an ordinary push, so this test proves nothing")
+	}
+
+	p := plan(t, g, work)
+	if _, err := g.Archive(p); err != nil {
+		t.Fatalf("a pre-push hook stopped an archive: %v", err)
+	}
+	if landed := bareGit(t, bare, "rev-parse", p.Ref); landed != p.Commit {
+		t.Errorf("the remote holds %s, want %s", landed, p.Commit)
+	}
+}
