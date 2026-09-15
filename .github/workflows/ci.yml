@@ -1,0 +1,35 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # Both, because every interesting thing this tool does is a subprocess:
+    # git, lsof, the shim on PATH. A pass on one says little about the other.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: git identity
+        # The tests build real repositories and commit in them, and a runner
+        # has no global identity to borrow.
+        run: |
+          git config --global user.email ci@example.com
+          git config --global user.name CI
+
+      - run: gofmt -l . | tee /tmp/fmt && test ! -s /tmp/fmt
+      - run: go vet ./...
+      - run: go test -race ./...

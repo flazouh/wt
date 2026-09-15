@@ -1,10 +1,22 @@
 # wt
 
+[![ci](https://github.com/flazouh/wt/actions/workflows/ci.yml/badge.svg)](https://github.com/flazouh/wt/actions/workflows/ci.yml)
+
 A capped pool of git worktrees, shared by every agent on this machine.
 
 Five worktrees per repository. When a sixth is asked for, the least recently
 used one is recycled rather than a sixth being created. Nothing is ever
 recycled while something is working inside it.
+
+## Install
+
+```sh
+go install github.com/flazouh/wt/cmd/wt@latest
+```
+
+That puts `wt` in `$(go env GOPATH)/bin`, which needs to be on your PATH. Go
+1.26 or later; `git` is required, and `lsof` is required for the liveness check
+that gates every deletion.
 
 ## Why
 
@@ -133,3 +145,19 @@ test, not a hope.
 - The cap is per repository. Five repositories with full pools is twenty-five
   worktrees, which is a lot less than forty-eight but is not five.
 - `wt strays` reports across the current repository only.
+- macOS and Linux. The liveness probe shells out to `lsof`, and the shim is a
+  POSIX script, so Windows is unsupported rather than untested.
+
+## Contributing
+
+`go test -race ./...`, `gofmt -l .` empty, `go vet ./...` clean. CI runs all
+three on Linux and macOS.
+
+The layout above is the review standard: `internal/pool` must stay free of git,
+and anything that shells out belongs in `internal/gitwt`. Changes to the three
+safety questions want a test against a real repository, not a fake — every bug
+found in this tool so far was invisible to a fake git.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
