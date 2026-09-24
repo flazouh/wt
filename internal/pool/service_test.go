@@ -140,7 +140,7 @@ func TestReuseTouchesNothingOnDisk(t *testing.T) {
 func TestReconcileForgetsWorktreesRemovedByHand(t *testing.T) {
 	p := full(t)
 	g := &fakeGit{}
-	// Only two of the five still exist.
+	// Only two of the full pool still exist.
 	g.trees = []Tree{
 		{Path: "/repo", Main: true},
 		{Path: p.Slots[0].Path},
@@ -153,8 +153,8 @@ func TestReconcileForgetsWorktreesRemovedByHand(t *testing.T) {
 		t.Fatalf("reconcile: %v", err)
 	}
 
-	if dropped != 3 {
-		t.Fatalf("dropped %d slots, want 3", dropped)
+	if dropped != Limit-2 {
+		t.Fatalf("dropped %d slots, want %d", dropped, Limit-2)
 	}
 	if len(p.Slots) != 2 {
 		t.Fatalf("pool holds %d slots, want 2", len(p.Slots))

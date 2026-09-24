@@ -4,7 +4,7 @@
 
 A capped pool of git worktrees, shared by every agent on this machine.
 
-Five worktrees per repository. When a sixth is asked for, the least recently
+Six worktrees per repository. When a seventh is asked for, the least recently
 used one is recycled rather than a sixth being created. Nothing is ever
 recycled while something is working inside it.
 
@@ -61,7 +61,7 @@ comes back empty; the same guard is here as a typed error.
 
 The third question is subtler than it looks. Comparing against remotes alone
 means a repository with no remote configured has every commit unreachable from
-one, so every worktree reads as protected and the pool wedges at five for good.
+one, so every worktree reads as protected and the pool wedges at the cap for good.
 It compares against every other ref instead.
 
 ## Archiving
@@ -151,8 +151,8 @@ test, not a hope.
   fails in between, the directory exists and the registry does not know it. It
   shows up under `wt strays` and the next `take` at that index clears it, but
   the window is real.
-- The cap is per repository. Five repositories with full pools is twenty-five
-  worktrees, which is a lot less than forty-eight but is not five.
+- The cap is per repository. Five repositories with full pools is thirty
+  worktrees, which is a lot less than forty-eight but is not six.
 - `wt strays` reports across the current repository only.
 - macOS and Linux. The liveness probe shells out to `lsof`, and the shim is a
   POSIX script, so Windows is unsupported rather than untested.

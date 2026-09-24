@@ -1,6 +1,6 @@
 // Command wt hands out git worktrees from a capped pool.
 //
-// One pool per repository, five worktrees each, recycled least-recently-used
+// One pool per repository, six worktrees each, recycled least-recently-used
 // and never while something is working inside one.
 package main
 

@@ -108,7 +108,7 @@ func (g *Git) Dirty(path string) (bool, error) {
 // another local branch. Comparing against remotes alone looks right and is not.
 // A repository with no remote configured has every commit unreachable from a
 // remote, so every worktree reads as unpushed, nothing is ever recyclable, and
-// the pool wedges at five for good. That is not hypothetical; it is what the
+// the pool wedges at the cap for good. That is not hypothetical; it is what the
 // first end-to-end run did.
 //
 // Excluding this worktree's own branch is what makes the question meaningful:

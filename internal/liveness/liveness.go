@@ -23,8 +23,8 @@ var ErrProbeUnavailable = errors.New("liveness probe unavailable")
 // Probe reads the machine's open files and command lines once, then answers
 // many questions from that snapshot.
 //
-// One snapshot rather than a call per slot, because five slots would otherwise
-// mean five lsof invocations at roughly a second each, and because a set of
+// One snapshot rather than a call per slot, because six slots would otherwise
+// mean six lsof invocations at roughly a second each, and because a set of
 // answers taken at one instant is consistent where a sequence of them is not.
 type Probe struct {
 	once  sync.Once
