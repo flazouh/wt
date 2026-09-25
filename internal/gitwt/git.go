@@ -114,12 +114,98 @@ func (g *Git) Dirty(path string) (bool, error) {
 // Excluding this worktree's own branch is what makes the question meaningful:
 // a branch cut from main with nothing new on it is fully contained in main, and
 // losing it costs nothing.
+//
+// Commits that exist nowhere else by hash can still exist upstream by content,
+// and those are forgiven: see landedUpstream.
 func (g *Git) Unpushed(path string) (bool, error) {
 	count, err := g.UniqueCommits(path)
 	if err != nil {
 		return false, err
 	}
-	return count > 0, nil
+	if count == 0 {
+		return false, nil
+	}
+	return !g.landedUpstream(path), nil
+}
+
+// landedUpstream reports whether every commit HEAD holds that the remote's
+// default branch lacks is already there by content.
+//
+// Reachability cannot see a cherry-pick, or a squash that landed without a pull
+// request for `Merged` to find: both put the same change on main under a new
+// hash, so the worktree's own commits exist on no other ref while the work
+// itself is upstream. One slot was held for exactly this with four commits,
+// every one of which `git cherry` marked as already on origin/main.
+//
+// `git cherry` prints one line per commit HEAD has and upstream lacks, "-" for
+// those whose patch is already upstream and "+" for the rest. The worktree is
+// cleared only when there is at least one line and every line is "-". No lines
+// is not proof: a worktree standing on the very branch it is compared with, as
+// one on main is when there is no remote, lists nothing at all.
+//
+// `git cherry` skips merge commits without saying so, which would clear a merge
+// carrying a conflict resolution or an edit of its own because its parents
+// landed. So a worktree holding any unique merge is never cleared by content.
+//
+// Every failure answers false, which leaves the reachability verdict standing.
+// Not being able to find out is not the same as finding out it is safe.
+func (g *Git) landedUpstream(path string) bool {
+	upstream := g.upstream(path)
+	if upstream == "" {
+		return false
+	}
+
+	revs, err := g.uniqueRevs(path)
+	if err != nil {
+		return false
+	}
+	merges, err := g.runStdin(path, revs, "rev-list", "--count", "--merges", "--stdin")
+	if err != nil || strings.TrimSpace(merges) != "0" {
+		return false
+	}
+
+	out, err := g.run(path, "cherry", upstream, "HEAD")
+	if err != nil {
+		return false
+	}
+	lines := 0
+	for _, line := range strings.Split(out, "\n") {
+		if line = strings.TrimSpace(line); line == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, "- ") {
+			return false
+		}
+		lines++
+	}
+	return lines > 0
+}
+
+// upstream names the branch work is meant to land on, or "" when there is
+// none to be found.
+//
+// The remote's own record of its default branch comes first, because a guess at
+// the name is wrong for every repository whose trunk is not called main. It is
+// only there when something set it (a clone does, `git remote set-head` does),
+// so the conventional names follow, local last: in a repository with no remote,
+// the local main is the only upstream there is.
+func (g *Git) upstream(path string) string {
+	if out, err := g.run(path, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"); err == nil {
+		if ref := strings.TrimSpace(out); ref != "" && g.resolves(path, ref) {
+			return ref
+		}
+	}
+	for _, ref := range []string{"refs/remotes/origin/main", "refs/heads/main"} {
+		if g.resolves(path, ref) {
+			return ref
+		}
+	}
+	return ""
+}
+
+func (g *Git) resolves(path, ref string) bool {
+	_, err := g.run(path, "rev-parse", "--verify", "--quiet", ref+"^{commit}")
+	return err == nil
 }
 
 // UniqueCommits counts the commits a worktree holds that exist on no other ref.
@@ -134,15 +220,34 @@ func (g *Git) UniqueCommits(path string) (int, error) {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return 0, nil
 	}
-	branch, err := g.run(path, "rev-parse", "--abbrev-ref", "HEAD")
+	revs, err := g.uniqueRevs(path)
 	if err != nil {
 		return 0, err
+	}
+	out, err := g.runStdin(path, revs, "rev-list", "--count", "--stdin")
+	if err != nil {
+		return 0, err
+	}
+	count, err := strconv.Atoi(strings.TrimSpace(out))
+	if err != nil {
+		return 0, fmt.Errorf("counting unique commits in %s: %w", path, err)
+	}
+	return count, nil
+}
+
+// uniqueRevs is the `rev-list --stdin` input that selects the commits HEAD
+// holds and no other ref does. Counting them and asking which are merges are
+// the same selection, so it is built in one place.
+func (g *Git) uniqueRevs(path string) (string, error) {
+	branch, err := g.run(path, "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		return "", err
 	}
 	mine := "refs/heads/" + strings.TrimSpace(branch)
 
 	refs, err := g.run(path, "for-each-ref", "--format=%(refname)")
 	if err != nil {
-		return 0, err
+		return "", err
 	}
 
 	// `--exclude=<pattern> --all` looks like the way to say this and is not:
@@ -154,25 +259,14 @@ func (g *Git) UniqueCommits(path string) (int, error) {
 	// otherwise build a command line long enough to be refused.
 	var revs strings.Builder
 	revs.WriteString("HEAD\n")
-	others := 0
 	for _, ref := range strings.Split(refs, "\n") {
 		ref = strings.TrimSpace(ref)
 		if ref == "" || ref == mine {
 			continue
 		}
 		revs.WriteString("^" + ref + "\n")
-		others++
 	}
-
-	out, err := g.runStdin(path, revs.String(), "rev-list", "--count", "--stdin")
-	if err != nil {
-		return 0, err
-	}
-	count, err := strconv.Atoi(strings.TrimSpace(out))
-	if err != nil {
-		return 0, fmt.Errorf("counting unique commits in %s: %w", path, err)
-	}
-	return count, nil
+	return revs.String(), nil
 }
 
 // runStdin is run with input, for the commands that take a ref list.
