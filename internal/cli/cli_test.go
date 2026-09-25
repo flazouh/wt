@@ -167,3 +167,28 @@ func TestStraysHelpOffersBothSweeps(t *testing.T) {
 		}
 	}
 }
+
+func TestLimitFromEnv(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  int
+		ok    bool
+	}{
+		{"", 0, true},
+		{"10", 10, true},
+		{" 7 ", 7, true},
+		{"0", 0, false},
+		{"-3", 0, false},
+		{"ten", 0, false},
+	} {
+		t.Setenv("WT_LIMIT", tc.value)
+		got, err := limitFromEnv()
+		if (err == nil) != tc.ok {
+			t.Errorf("WT_LIMIT=%q: err %v, want ok=%v", tc.value, err, tc.ok)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("WT_LIMIT=%q: got %d, want %d", tc.value, got, tc.want)
+		}
+	}
+}

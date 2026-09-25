@@ -4,9 +4,9 @@
 
 A capped pool of git worktrees, shared by every agent on this machine.
 
-Six worktrees per repository. When a seventh is asked for, the least recently
-used one is recycled rather than a sixth being created. Nothing is ever
-recycled while something is working inside it.
+Six worktrees per repository, or `$WT_LIMIT`. When one more is asked for, the
+least recently used one is recycled rather than another being created. Nothing
+is ever recycled while something is working inside it.
 
 ## Install
 
@@ -136,6 +136,14 @@ The rules do not know what a repository is, which is why they are tested
 without one. The parts that do talk to git are tested against a real one,
 because the two bugs found during the first end-to-end run were both invisible
 to a fake.
+
+## Limit
+
+Six per repository unless `WT_LIMIT` says otherwise. It is read on every run
+and never stored, so changing it takes effect immediately for every pool. A
+value that is not a positive integer is an error, not a silent fallback to
+six. Lowering it below what a pool already holds removes nothing: the pool
+simply stops creating, and recycles within the slots it has.
 
 ## State
 

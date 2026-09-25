@@ -107,7 +107,12 @@ func open() (*session, error) {
 	if err != nil {
 		return nil, err
 	}
+	limit, err := limitFromEnv()
+	if err != nil {
+		return nil, err
+	}
 	p := reg.For(g.Repo)
+	p.Limit = limit
 	return &session{
 		store: store,
 		git:   g,
@@ -120,6 +125,22 @@ func open() (*session, error) {
 			Now:    time.Now,
 		},
 	}, nil
+}
+
+// limitFromEnv reads the per-repository cap from WT_LIMIT, or 0 for the
+// default. A value that is set but unusable is an error rather than a quiet
+// fallback: an agent that believes it raised the cap and did not would find out
+// only when the pool refused it.
+func limitFromEnv() (int, error) {
+	v := strings.TrimSpace(os.Getenv("WT_LIMIT"))
+	if v == "" {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 {
+		return 0, fmt.Errorf("WT_LIMIT must be a positive integer, got %q", v)
+	}
+	return n, nil
 }
 
 // poolRoot keeps every pooled worktree in one directory beside the checkout, so
@@ -234,7 +255,7 @@ func takeFailed(w io.Writer, err error) int {
 	var full *pool.ErrFull
 	if errors.As(err, &full) {
 		var d toon.Doc
-		d.Field("error", fmt.Sprintf("the pool is full: %d of %d slots", pool.Limit, pool.Limit))
+		d.Field("error", fmt.Sprintf("the pool is full: %d of %d slots", full.Limit, full.Limit))
 		rows := make([][]any, 0, len(full.Blockers))
 		for _, b := range full.Blockers {
 			rows = append(rows, []any{b})

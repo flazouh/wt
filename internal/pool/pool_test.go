@@ -2,6 +2,7 @@ package pool
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -39,7 +40,7 @@ func (blind) InUse(string) (bool, error) {
 func full(t *testing.T) *Pool {
 	t.Helper()
 	p := &Pool{Repo: "/repo"}
-	for i := 1; i <= Limit; i++ {
+	for i := 1; i <= DefaultLimit; i++ {
 		p.Slots = append(p.Slots, &Slot{
 			Index: i,
 			Repo:  "/repo",
@@ -53,7 +54,7 @@ func full(t *testing.T) *Pool {
 
 func TestCreatesUpToTheLimitAndNoFurther(t *testing.T) {
 	p := &Pool{Repo: "/repo"}
-	for i := 1; i <= Limit; i++ {
+	for i := 1; i <= DefaultLimit; i++ {
 		plan, err := p.Acquire("b"+string(rune('0'+i)), "agent", 1, safeWorld{}, epoch)
 		if err != nil {
 			t.Fatalf("acquire %d: %v", i, err)
@@ -63,13 +64,13 @@ func TestCreatesUpToTheLimitAndNoFurther(t *testing.T) {
 		}
 		plan.Slot.Path = "/repo/.wt/" + string(rune('0'+i))
 	}
-	if len(p.Slots) != Limit {
-		t.Fatalf("pool holds %d slots, want %d", len(p.Slots), Limit)
+	if len(p.Slots) != DefaultLimit {
+		t.Fatalf("pool holds %d slots, want %d", len(p.Slots), DefaultLimit)
 	}
 
 	// Every agent finishes. The worktrees stay on disk, which is what makes
 	// the sixth request a recycle rather than a refusal.
-	for i := 1; i <= Limit; i++ {
+	for i := 1; i <= DefaultLimit; i++ {
 		if err := p.Release(i, epoch.Add(time.Duration(i)*time.Minute)); err != nil {
 			t.Fatalf("release %d: %v", i, err)
 		}
@@ -83,7 +84,7 @@ func TestCreatesUpToTheLimitAndNoFurther(t *testing.T) {
 	if plan.Create {
 		t.Fatal("the sixth acquire created a slot; the cap is not a cap")
 	}
-	if len(p.Slots) != Limit {
+	if len(p.Slots) != DefaultLimit {
 		t.Fatalf("pool grew to %d slots past the limit", len(p.Slots))
 	}
 }
@@ -197,7 +198,7 @@ func TestAFullPoolSaysWhichLeaseToEnd(t *testing.T) {
 	if !errors.As(err, &isFull) {
 		t.Fatalf("got %v, want ErrFull", err)
 	}
-	if len(isFull.Blockers) != Limit {
+	if len(isFull.Blockers) != DefaultLimit {
 		t.Fatalf("named %d blockers, want one per slot", len(isFull.Blockers))
 	}
 	if isFull.Blockers[0] != "1: leased by agent-a" {
@@ -243,5 +244,33 @@ func TestAcquireRequiresABranch(t *testing.T) {
 
 	if _, err := p.Acquire("", "agent", 1, safeWorld{}, epoch); err == nil {
 		t.Fatal("acquire accepted an empty branch")
+	}
+}
+
+func TestLimitOverridesTheDefault(t *testing.T) {
+	p := &Pool{Repo: "/repo", Limit: DefaultLimit + 3}
+	for i := 1; i <= p.Cap(); i++ {
+		plan, err := p.Acquire(fmt.Sprintf("b%d", i), "agent", 1, safeWorld{}, epoch)
+		if err != nil {
+			t.Fatalf("acquire %d: %v", i, err)
+		}
+		if !plan.Create {
+			t.Fatalf("acquire %d did not create", i)
+		}
+	}
+	if len(p.Slots) != DefaultLimit+3 {
+		t.Fatalf("pool holds %d slots, want %d", len(p.Slots), DefaultLimit+3)
+	}
+
+	for _, s := range p.Slots {
+		s.State = Pinned
+	}
+	_, err := p.Acquire("one-more", "agent", 1, safeWorld{}, epoch)
+	var full *ErrFull
+	if !errors.As(err, &full) {
+		t.Fatalf("got %v, want ErrFull", err)
+	}
+	if full.Limit != DefaultLimit+3 {
+		t.Fatalf("ErrFull reports limit %d, want %d", full.Limit, DefaultLimit+3)
 	}
 }

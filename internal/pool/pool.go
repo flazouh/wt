@@ -11,11 +11,12 @@ import (
 // reasons so the caller can tell the agent which lease to end rather than
 // making it ask again.
 type ErrFull struct {
+	Limit    int
 	Blockers []string
 }
 
 func (e *ErrFull) Error() string {
-	return fmt.Sprintf("all %d slots are in use: %v", Limit, e.Blockers)
+	return fmt.Sprintf("all %d slots are in use: %v", e.Limit, e.Blockers)
 }
 
 // Safety answers the questions the pool cannot answer itself. A slot is only
@@ -92,6 +93,18 @@ func Archivable(r Reason) bool { return r == ReasonUnpushed }
 type Pool struct {
 	Repo  string  `json:"repo"`
 	Slots []*Slot `json:"slots"`
+	// Limit overrides DefaultLimit when positive. It is configuration, not
+	// state, so it is never written to the registry: the machine's setting
+	// applies to every pool at the moment it is read.
+	Limit int `json:"-"`
+}
+
+// Cap is how many slots this pool may hold.
+func (p *Pool) Cap() int {
+	if p.Limit > 0 {
+		return p.Limit
+	}
+	return DefaultLimit
 }
 
 // Find returns the slot at an index, or nil.
@@ -124,7 +137,7 @@ func (p *Pool) freeIndex() (int, bool) {
 	for _, s := range p.Slots {
 		taken[s.Index] = true
 	}
-	for i := 1; i <= Limit; i++ {
+	for i := 1; i <= p.Cap(); i++ {
 		if !taken[i] {
 			return i, true
 		}
@@ -174,7 +187,7 @@ func (p *Pool) Acquire(branch, owner string, pid int, safe Safety, now time.Time
 		return nil, err
 	}
 	if victim == nil {
-		return nil, &ErrFull{Blockers: blockers}
+		return nil, &ErrFull{Limit: p.Cap(), Blockers: blockers}
 	}
 
 	evicted := victim.Path
