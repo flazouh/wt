@@ -44,14 +44,17 @@ func (f *fakeGit) DefaultBase() string   { return "origin/main" }
 func (f *fakeGit) Fetch() error          { return nil }
 func (f *fakeGit) List() ([]Tree, error) { return f.trees, nil }
 
+// service builds a Service whose world says every lease is alive, so the tests
+// that are not about stale leases never see one taken back.
 func service(t *testing.T, p *Pool, g *fakeGit, safe Safety) *Service {
 	t.Helper()
 	return &Service{
-		Pool:   p,
-		Git:    g,
-		Safety: safe,
-		Root:   t.TempDir(),
-		Now:    func() time.Time { return epoch },
+		Pool:     p,
+		Git:      g,
+		Safety:   safe,
+		Activity: &activity{probeErr: errors.New("every lease is alive")},
+		Root:     t.TempDir(),
+		Now:      func() time.Time { return epoch },
 	}
 }
 
@@ -257,21 +260,6 @@ func TestAReleasedLeaseStillPassesEveryRecycleCheck(t *testing.T) {
 				t.Fatalf("blockers %v do not name %q", isFull.Blockers, want)
 			}
 		})
-	}
-}
-
-// A service built without an activity source keeps the old behaviour: leases
-// stand until someone ends them.
-func TestReconcileWithoutActivityReleasesNothing(t *testing.T) {
-	s, _ := staleService(t, safeWorld{})
-	s.Activity = nil
-
-	r, err := s.Reconcile()
-	if err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
-	if len(r.Released) != 0 {
-		t.Fatalf("released %v with no way to judge activity", r.Released)
 	}
 }
 

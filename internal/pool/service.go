@@ -29,9 +29,7 @@ type Service struct {
 	Pool   *Pool
 	Git    Git
 	Safety Safety
-	// Activity judges whether a lease has been abandoned. Nil leaves every
-	// lease standing until someone ends it, which is how the pool behaved
-	// before leases could go stale.
+	// Activity judges whether a lease has been abandoned.
 	Activity Activity
 	Root     string
 	Now      func() time.Time
@@ -119,11 +117,10 @@ func (s *Service) Reconcile() (Reconciled, error) {
 	}
 	s.Pool.Slots = kept
 
-	r := Reconciled{Dropped: dropped}
-	if s.Activity != nil {
-		r.Released = s.Pool.ReleaseStale(s.Activity, s.Now())
-	}
-	return r, nil
+	return Reconciled{
+		Dropped:  dropped,
+		Released: s.Pool.ReleaseStale(s.Activity, s.Now()),
+	}, nil
 }
 
 // Reconciled is what Reconcile changed, so the caller can say so.
