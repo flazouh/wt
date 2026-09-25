@@ -108,16 +108,21 @@ func open() (*session, error) {
 		return nil, err
 	}
 	p := reg.For(g.Repo)
+	// One safety value serves both questions, so the stale-lease check and the
+	// recycle check read the same process snapshot: lsof runs once per command
+	// however many slots are asked about, and the two answers cannot disagree.
+	world := safety{g, liveness.New(), gitwt.NewMerged()}
 	return &session{
 		store: store,
 		git:   g,
 		reg:   reg,
 		svc: &pool.Service{
-			Pool:   p,
-			Git:    adapter{g},
-			Safety: safety{g, liveness.New(), gitwt.NewMerged()},
-			Root:   poolRoot(g.Repo),
-			Now:    time.Now,
+			Pool:     p,
+			Git:      adapter{g},
+			Safety:   world,
+			Activity: world,
+			Root:     poolRoot(g.Repo),
+			Now:      time.Now,
 		},
 	}, nil
 }
@@ -159,6 +164,9 @@ type safety struct {
 func (s safety) InUse(path string) (bool, error) { return s.probe.InUse(path) }
 func (s safety) Dirty(path string) (bool, error) { return s.g.Dirty(path) }
 
+// LastTouched is the other half of pool.Activity, beside InUse.
+func (s safety) LastTouched(path string) (time.Time, error) { return s.g.LastTouched(path) }
+
 // Unpushed asks git, then forgives the one case git cannot see.
 //
 // A squash-merged branch has commits that exist on no other ref, because the
@@ -193,13 +201,26 @@ func take(w io.Writer, flags map[string]string, rest []string) int {
 
 	var slot *pool.Slot
 	var action string
+	var released []pool.Released
+	var full error
 	err = s.store.Update(func(reg *registry.Registry) error {
 		s.svc.Pool = reg.For(s.git.Repo)
-		if _, err := s.svc.Reconcile(); err != nil {
+		r, err := s.svc.Reconcile()
+		if err != nil {
 			return err
 		}
-		var err error
+		released = r.Released
 		slot, action, err = s.svc.Acquire(branch, owner, os.Getpid())
+		// A full pool is a verdict, not a failure, and it changes nothing: the
+		// pool decides it before touching a slot. So what Reconcile found is
+		// still written. A lease taken back from a dead session stays taken
+		// back even when its worktree cannot be recycled yet, and the listing
+		// then shows it as the idle slot it is.
+		var isFull *pool.ErrFull
+		if errors.As(err, &isFull) {
+			full = err
+			return nil
+		}
 		if err != nil {
 			return err
 		}
@@ -208,8 +229,11 @@ func take(w io.Writer, flags map[string]string, rest []string) int {
 		}
 		return nil
 	})
+	if err == nil {
+		err = full
+	}
 	if err != nil {
-		return takeFailed(w, err)
+		return takeFailed(w, err, released)
 	}
 
 	var d toon.Doc
@@ -219,6 +243,7 @@ func take(w io.Writer, flags map[string]string, rest []string) int {
 		"slot":   slot.Index,
 		"action": action,
 	})
+	releasedTable(&d, released)
 	d.Help(
 		"cd "+slot.Path,
 		fmt.Sprintf("Run `wt done %d` when finished, which keeps it for reuse", slot.Index),
@@ -230,7 +255,11 @@ func take(w io.Writer, flags map[string]string, rest []string) int {
 // takeFailed turns the two interesting failures into advice. A full pool names
 // the leases to end; a broken liveness probe says the machine cannot be
 // inspected rather than pretending the pool is full.
-func takeFailed(w io.Writer, err error) int {
+//
+// Released leases are reported only beside a full pool, because that is the one
+// failure after which they were written. Any other failure wrote nothing, so the
+// leases it would have taken back are still standing.
+func takeFailed(w io.Writer, err error, released []pool.Released) int {
 	var full *pool.ErrFull
 	if errors.As(err, &full) {
 		var d toon.Doc
@@ -240,6 +269,7 @@ func takeFailed(w io.Writer, err error) int {
 			rows = append(rows, []any{b})
 		}
 		d.Table("blocked", []string{"reason"}, rows)
+		releasedTable(&d, released)
 		d.Help(
 			"Run `wt done <index>` to release one you own",
 			"Run `wt drop <index>` to remove one for good",

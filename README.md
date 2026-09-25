@@ -5,8 +5,9 @@
 A capped pool of git worktrees, shared by every agent on this machine.
 
 Six worktrees per repository. When a seventh is asked for, the least recently
-used one is recycled rather than a sixth being created. Nothing is ever
-recycled while something is working inside it.
+used idle one is recycled rather than a seventh being created. Nothing is ever
+recycled while something is working inside it, and a lease whose holder died
+is taken back after two days of silence.
 
 ## Install
 
@@ -46,13 +47,49 @@ Output is [TOON](https://toonformat.dev/) on stdout, errors included, so an
 agent reads success and failure through the same channel. Exit codes are 0 for
 success including no-ops, 1 for failure, 2 for usage.
 
+## When a slot is recycled
+
+A `take` reuses an idle slot already on the branch, then creates a slot while
+fewer than six exist, then recycles the least recently used idle slot. Leased
+and pinned slots are never recycled. An idle slot is recycled only when it
+passes every check under [What it will not do](#what-it-will-not-do).
+
+A lease is released by `wt done`, or by the pool itself when the holder has
+plainly gone. Every `take` and every bare `wt` reconciles first. A leased slot
+becomes idle when both of these hold:
+
+- its last activity is more than 48 hours ago. Last activity is the latest of
+  the lease's own stamp, the modification time of the worktree's git index,
+  and the committer date of its HEAD.
+- no live process is working in it.
+
+The index and HEAD are read because the stamp alone lies. An agent often works
+in a worktree through absolute paths while its shell stands elsewhere. It never
+refreshes the lease, and the process probe cannot see it, but the index moves
+when it stages and HEAD moves when it commits.
+
+Any question that cannot be answered keeps the lease. A broken `lsof` keeps
+every lease, and so does an unreadable index. Pinned slots are never released.
+A released slot only becomes idle: nothing on disk changes, and it is recycled
+only after passing every safety check, like any other idle slot. The output
+names each released lease in a `released` table, with its old owner and why:
+
+```
+released[1]{slot,owner,why}:
+  1,alex,"lease released: idle 3d, no live process"
+```
+
+A full pool keeps the release. The `take` still fails, but the listing then
+shows the slot as idle, not as a lease nobody holds.
+
 ## What it will not do
 
 Three questions are asked before anything is deleted:
 
 - is a live process working in it
 - does it have uncommitted changes
-- does it hold commits that exist on no other ref
+- does it hold commits that exist on no other ref, and not on the remote's
+  default branch by content
 
 Any yes, and the worktree is left alone. So is *any error* asking: a machine
 that cannot answer "is something running in here?" gets nothing deleted at all.
@@ -63,6 +100,16 @@ The third question is subtler than it looks. Comparing against remotes alone
 means a repository with no remote configured has every commit unreachable from
 one, so every worktree reads as protected and the pool wedges at the cap for good.
 It compares against every other ref instead.
+
+Reachability cannot see a cherry-pick, or a squash that landed with no pull
+request to find. Both put the change on main under a new hash. So when a
+worktree holds unique commits, `git cherry` compares them with the remote's
+default branch: `origin/HEAD`, then `origin/main`, then `main`. The worktree
+counts as pushed only when every line is `-`, meaning each patch is already
+there. A `+` line keeps it. So do no lines at all, no upstream to compare
+with, and any error. A unique merge commit also keeps it, because
+`git cherry` skips merges without comment, and a merge can carry an edit of
+its own.
 
 ## Archiving
 

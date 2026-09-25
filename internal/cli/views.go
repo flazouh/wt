@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/flazouh/wt/internal/pool"
+	"github.com/flazouh/wt/internal/registry"
 	"github.com/flazouh/wt/internal/shim"
 	"github.com/flazouh/wt/internal/toon"
 )
@@ -26,7 +27,13 @@ func home(w io.Writer) int {
 		return Fail
 	}
 
-	p := s.reg.For(s.git.Repo)
+	p, released, err := reconciled(s)
+	if err != nil {
+		// The snapshot is still worth showing. It may count a slot that is
+		// gone or a lease that is dead, and the warning says it was not
+		// checked rather than letting it pass as current.
+		d.Field("warning", "the pool was not reconciled, so this is the last saved state: "+err.Error())
+	}
 	d.Section("pool", map[string]any{
 		"repo":  collapseHome(s.git.Repo),
 		"used":  len(p.Slots),
@@ -44,6 +51,7 @@ func home(w io.Writer) int {
 		})
 	}
 	d.Table("slots", []string{"slot", "branch", "state", "idle", "path"}, rows)
+	releasedTable(&d, released)
 
 	// Strays are the part the cap cannot see, so the home view says how many
 	// there are rather than leaving an agent to discover them.
@@ -74,13 +82,70 @@ func homeHelp(p *pool.Pool) []string {
 	}
 }
 
+// reconciled brings the pool up to date under the registry lock and returns it,
+// with the leases that were taken back on the way.
+//
+// The listing writes, which a listing usually should not, because it is where a
+// person looks when the pool is full. Showing six leases when one of them
+// belongs to a session that died days ago sends them chasing an owner who is
+// not there. An empty pool is left unwritten, so looking at a repository that
+// has never used `wt` does not add it to the registry.
+//
+// On failure it returns the unlocked snapshot, so the caller can still show
+// something.
+func reconciled(s *session) (*pool.Pool, []pool.Released, error) {
+	snapshot := s.reg.For(s.git.Repo)
+	if len(snapshot.Slots) == 0 {
+		return snapshot, nil, nil
+	}
+	var p *pool.Pool
+	var released []pool.Released
+	err := s.store.Update(func(reg *registry.Registry) error {
+		s.svc.Pool = reg.For(s.git.Repo)
+		r, err := s.svc.Reconcile()
+		if err != nil {
+			return err
+		}
+		p, released = s.svc.Pool, r.Released
+		return nil
+	})
+	if err != nil {
+		s.svc.Pool = snapshot
+		return snapshot, nil, err
+	}
+	return p, released, nil
+}
+
+// releasedTable reports the leases the pool took back as abandoned, and writes
+// nothing when there were none. An agent whose lease vanished without a word
+// would take it for a bug; one that reads this knows who held it and why it
+// was judged gone.
+func releasedTable(d *toon.Doc, released []pool.Released) {
+	if len(released) == 0 {
+		return
+	}
+	rows := make([][]any, 0, len(released))
+	for _, r := range released {
+		rows = append(rows, []any{
+			r.Index,
+			r.Owner,
+			"lease released: idle " + span(r.Idle) + ", no live process",
+		})
+	}
+	d.Table("released", []string{"slot", "owner", "why"}, rows)
+}
+
 // age renders how long a slot has sat untouched, which is what decides who gets
 // recycled first.
 func age(t time.Time) string {
 	if t.IsZero() {
 		return "-"
 	}
-	d := time.Since(t)
+	return span(time.Since(t))
+}
+
+// span renders a duration at the one unit a person reads it in.
+func span(d time.Duration) string {
 	switch {
 	case d < time.Minute:
 		return "now"
