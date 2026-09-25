@@ -29,8 +29,12 @@ type Service struct {
 	Pool   *Pool
 	Git    Git
 	Safety Safety
-	Root   string
-	Now    func() time.Time
+	// Activity judges whether a lease has been abandoned. Nil leaves every
+	// lease standing until someone ends it, which is how the pool behaved
+	// before leases could go stale.
+	Activity Activity
+	Root     string
+	Now      func() time.Time
 }
 
 // SlotPath is where slot n lives. The index is in the directory name so a path
@@ -82,14 +86,22 @@ func (s *Service) Acquire(branch, owner string, pid int) (*Slot, string, error) 
 	}
 }
 
-// Reconcile drops slots whose worktree has disappeared and returns how many.
+// Reconcile brings the registry back in line with the world: it drops slots
+// whose worktree has disappeared, then takes back leases whose holder has gone.
 //
 // Someone removing a worktree by hand is not an error, but a registry that
-// still counts it holds a slot against the limit for nothing.
-func (s *Service) Reconcile() (int, error) {
+// still counts it holds a slot against the limit for nothing. A lease whose
+// session died is the same waste with a different cause, and before it was
+// handled here it wedged the pool at the cap for days.
+//
+// The drop runs first so the stale check never asks git about a directory that
+// is no longer there. It runs on every take and on every `wt`, rather than only
+// when the pool is full, so the listing shows the slot as idle, which is what it
+// has become, and not as a lease nobody holds.
+func (s *Service) Reconcile() (Reconciled, error) {
 	trees, err := s.Git.List()
 	if err != nil {
-		return 0, err
+		return Reconciled{}, err
 	}
 	alive := make(map[string]bool, len(trees))
 	for _, t := range trees {
@@ -106,7 +118,20 @@ func (s *Service) Reconcile() (int, error) {
 		kept = append(kept, slot)
 	}
 	s.Pool.Slots = kept
-	return dropped, nil
+
+	r := Reconciled{Dropped: dropped}
+	if s.Activity != nil {
+		r.Released = s.Pool.ReleaseStale(s.Activity, s.Now())
+	}
+	return r, nil
+}
+
+// Reconciled is what Reconcile changed, so the caller can say so.
+type Reconciled struct {
+	// Dropped counts slots whose worktree had disappeared.
+	Dropped int
+	// Released lists the leases taken back as abandoned.
+	Released []Released
 }
 
 // Strays are worktrees git knows about that the pool never created. They are

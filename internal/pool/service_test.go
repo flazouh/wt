@@ -148,13 +148,13 @@ func TestReconcileForgetsWorktreesRemovedByHand(t *testing.T) {
 	}
 	s := service(t, p, g, safeWorld{})
 
-	dropped, err := s.Reconcile()
+	r, err := s.Reconcile()
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 
-	if dropped != Limit-2 {
-		t.Fatalf("dropped %d slots, want %d", dropped, Limit-2)
+	if r.Dropped != Limit-2 {
+		t.Fatalf("dropped %d slots, want %d", r.Dropped, Limit-2)
 	}
 	if len(p.Slots) != 2 {
 		t.Fatalf("pool holds %d slots, want 2", len(p.Slots))
@@ -167,13 +167,111 @@ func TestReconcileKeepsASlotThatHasNoWorktreeYet(t *testing.T) {
 	p := &Pool{Repo: "/repo", Slots: []*Slot{{Index: 1, State: Leased}}}
 	s := service(t, p, &fakeGit{trees: []Tree{{Path: "/repo", Main: true}}}, safeWorld{})
 
-	dropped, err := s.Reconcile()
+	r, err := s.Reconcile()
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 
-	if dropped != 0 || len(p.Slots) != 1 {
-		t.Fatalf("dropped %d, kept %d; a pending slot was discarded", dropped, len(p.Slots))
+	if r.Dropped != 0 || len(p.Slots) != 1 {
+		t.Fatalf("dropped %d, kept %d; a pending slot was discarded", r.Dropped, len(p.Slots))
+	}
+}
+
+// staleService is a full pool whose every slot is leased and present on disk,
+// with slot 1 abandoned three days ago. The world answers the stale-lease
+// questions through its activity and the recycle questions through safe.
+func staleService(t *testing.T, safe Safety) (*Service, *fakeGit) {
+	t.Helper()
+	p, world := leasedPool(t, epoch)
+	g := &fakeGit{trees: []Tree{{Path: "/repo", Main: true}}}
+	for _, slot := range p.Slots {
+		g.trees = append(g.trees, Tree{Path: slot.Path, Branch: slot.Branch})
+	}
+	s := service(t, p, g, safe)
+	s.Activity = world
+	return s, g
+}
+
+// The wedge this exists for: six slots leased by sessions that died days ago,
+// and every take refused.
+func TestReconcileReleasesAStaleLeaseSoTheNextTakeCanRecycleIt(t *testing.T) {
+	s, g := staleService(t, safeWorld{})
+
+	r, err := s.Reconcile()
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(r.Released) != 1 || r.Released[0].Index != 1 {
+		t.Fatalf("released %v, want slot 1", r.Released)
+	}
+
+	slot, action, err := s.Acquire("feature/new", "agent", 1)
+	if err != nil {
+		t.Fatalf("acquire after release: %v", err)
+	}
+	if action != "recycled" || slot.Index != 1 {
+		t.Fatalf("got %s slot %d, want slot 1 recycled", action, slot.Index)
+	}
+	if len(g.removed) != 1 || g.removed[0] != "/repo/.wt/1" {
+		t.Fatalf("removed %v, want the abandoned worktree", g.removed)
+	}
+}
+
+// Releasing a lease only makes the slot idle. Every question asked before a
+// worktree is torn down is still asked, and any yes still refuses.
+func TestAReleasedLeaseStillPassesEveryRecycleCheck(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		world  guarded
+		reason Reason
+	}{
+		{"dirty", guarded{dirty: map[string]bool{"/repo/.wt/1": true}}, ReasonDirty},
+		{"unpushed", guarded{unpushed: map[string]bool{"/repo/.wt/1": true}}, ReasonUnpushed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, g := staleService(t, tc.world)
+
+			r, err := s.Reconcile()
+			if err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+			if len(r.Released) != 1 {
+				t.Fatalf("released %v, want slot 1", r.Released)
+			}
+
+			_, _, err = s.Acquire("feature/new", "agent", 1)
+
+			var isFull *ErrFull
+			if !errors.As(err, &isFull) {
+				t.Fatalf("got %v, want a full pool", err)
+			}
+			if len(g.removed) != 0 {
+				t.Fatalf("removed %v although slot 1 is %s", g.removed, tc.name)
+			}
+			want := "1: " + string(tc.reason)
+			found := false
+			for _, b := range isFull.Blockers {
+				found = found || b == want
+			}
+			if !found {
+				t.Fatalf("blockers %v do not name %q", isFull.Blockers, want)
+			}
+		})
+	}
+}
+
+// A service built without an activity source keeps the old behaviour: leases
+// stand until someone ends them.
+func TestReconcileWithoutActivityReleasesNothing(t *testing.T) {
+	s, _ := staleService(t, safeWorld{})
+	s.Activity = nil
+
+	r, err := s.Reconcile()
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(r.Released) != 0 {
+		t.Fatalf("released %v with no way to judge activity", r.Released)
 	}
 }
 
