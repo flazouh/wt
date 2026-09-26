@@ -153,8 +153,8 @@ func TestReconcileForgetsWorktreesRemovedByHand(t *testing.T) {
 		t.Fatalf("reconcile: %v", err)
 	}
 
-	if dropped != Limit-2 {
-		t.Fatalf("dropped %d slots, want %d", dropped, Limit-2)
+	if dropped != DefaultLimit-2 {
+		t.Fatalf("dropped %d slots, want %d", dropped, DefaultLimit-2)
 	}
 	if len(p.Slots) != 2 {
 		t.Fatalf("pool holds %d slots, want 2", len(p.Slots))

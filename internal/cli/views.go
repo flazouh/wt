@@ -30,7 +30,7 @@ func home(w io.Writer) int {
 	d.Section("pool", map[string]any{
 		"repo":  collapseHome(s.git.Repo),
 		"used":  len(p.Slots),
-		"limit": pool.Limit,
+		"limit": p.Cap(),
 	})
 
 	rows := make([][]any, 0, len(p.Slots))
