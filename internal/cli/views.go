@@ -26,7 +26,7 @@ func home(w io.Writer) int {
 		return Fail
 	}
 
-	p := s.reg.For(s.git.Repo)
+	p := s.pool(s.reg)
 	d.Section("pool", map[string]any{
 		"repo":  collapseHome(s.git.Repo),
 		"used":  len(p.Slots),

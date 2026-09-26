@@ -88,6 +88,16 @@ type session struct {
 	git   *gitwt.Git
 	svc   *pool.Service
 	reg   *registry.Registry
+	limit int
+}
+
+// pool returns this repository's pool from a registry with the configured cap
+// applied. The cap is never stored, so every registry read under a lock loses
+// it and must come back through here.
+func (s *session) pool(reg *registry.Registry) *pool.Pool {
+	p := reg.For(s.git.Repo)
+	p.Limit = s.limit
+	return p
 }
 
 func open() (*session, error) {
@@ -111,20 +121,15 @@ func open() (*session, error) {
 	if err != nil {
 		return nil, err
 	}
-	p := reg.For(g.Repo)
-	p.Limit = limit
-	return &session{
-		store: store,
-		git:   g,
-		reg:   reg,
-		svc: &pool.Service{
-			Pool:   p,
-			Git:    adapter{g},
-			Safety: safety{g, liveness.New(), gitwt.NewMerged()},
-			Root:   poolRoot(g.Repo),
-			Now:    time.Now,
-		},
-	}, nil
+	s := &session{store: store, git: g, reg: reg, limit: limit}
+	s.svc = &pool.Service{
+		Pool:   s.pool(reg),
+		Git:    adapter{g},
+		Safety: safety{g, liveness.New(), gitwt.NewMerged()},
+		Root:   poolRoot(g.Repo),
+		Now:    time.Now,
+	}
+	return s, nil
 }
 
 // limitFromEnv reads the per-repository cap from WT_LIMIT, or 0 for the
@@ -215,7 +220,7 @@ func take(w io.Writer, flags map[string]string, rest []string) int {
 	var slot *pool.Slot
 	var action string
 	err = s.store.Update(func(reg *registry.Registry) error {
-		s.svc.Pool = reg.For(s.git.Repo)
+		s.svc.Pool = s.pool(reg)
 		if _, err := s.svc.Reconcile(); err != nil {
 			return err
 		}
@@ -299,7 +304,7 @@ func done(w io.Writer, _ map[string]string, rest []string) int {
 	}
 
 	err = s.store.Update(func(reg *registry.Registry) error {
-		return reg.For(s.git.Repo).Release(index, time.Now())
+		return s.pool(reg).Release(index, time.Now())
 	})
 	if err != nil {
 		return errorf(w, Fail, err.Error(), "Run `wt` to see the pool")
@@ -326,7 +331,7 @@ func targetIndex(s *session, rest []string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	for _, slot := range s.reg.For(s.git.Repo).Slots {
+	for _, slot := range s.pool(s.reg).Slots {
 		if slot.Path != "" && strings.HasPrefix(cwd, slot.Path) {
 			return slot.Index, nil
 		}
@@ -346,7 +351,7 @@ func drop(w io.Writer, _ map[string]string, rest []string) int {
 
 	var removed string
 	err = s.store.Update(func(reg *registry.Registry) error {
-		p := reg.For(s.git.Repo)
+		p := s.pool(reg)
 		slot := p.Find(index)
 		if slot == nil {
 			// Already gone is the state the caller wanted. Not an error.
@@ -398,7 +403,7 @@ func pin(w io.Writer, flags map[string]string, rest []string) int {
 
 	off := flags["off"] == "true"
 	err = s.store.Update(func(reg *registry.Registry) error {
-		slot := reg.For(s.git.Repo).Find(index)
+		slot := s.pool(reg).Find(index)
 		if slot == nil {
 			return fmt.Errorf("no slot %d", index)
 		}

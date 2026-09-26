@@ -2,8 +2,13 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/flazouh/wt/internal/pool"
 )
 
 func run(t *testing.T, args ...string) (string, int) {
@@ -190,5 +195,37 @@ func TestLimitFromEnv(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("WT_LIMIT=%q: got %d, want %d", tc.value, got, tc.want)
 		}
+	}
+}
+
+// take reloads the registry under its lock. The reload once built a fresh pool
+// that had lost WT_LIMIT, so status reported the raised cap while take still
+// refused at the default.
+func TestTakeHonoursARaisedLimit(t *testing.T) {
+	dir := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null",
+			"GIT_AUTHOR_NAME=T", "GIT_AUTHOR_EMAIL=t@example.com", "GIT_COMMITTER_NAME=T", "GIT_COMMITTER_EMAIL=t@example.com")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	git("init", "-q", "-b", "main")
+	git("commit", "-q", "--allow-empty", "-m", "init")
+	t.Setenv("WT_STATE_DIR", t.TempDir())
+	t.Chdir(dir)
+
+	t.Setenv("WT_LIMIT", "")
+	for i := range pool.DefaultLimit {
+		if out, code := run(t, "take", fmt.Sprintf("b%d", i), "--owner", "test"); code != 0 {
+			t.Fatalf("take %d failed: %s", i, out)
+		}
+	}
+	t.Setenv("WT_LIMIT", fmt.Sprint(pool.DefaultLimit+1))
+	if out, code := run(t, "take", "one-more", "--owner", "test"); code != 0 {
+		t.Fatalf("take refused under a raised WT_LIMIT: %s", out)
 	}
 }
