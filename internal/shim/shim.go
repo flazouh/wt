@@ -35,7 +35,7 @@ if [ "$1" = "worktree" ] && [ "$2" = "add" ]; then
     exec "$REAL" "$@"
   fi
   echo "error: 'git worktree add' is disabled on this machine"
-  echo "help: worktrees come from the pool, capped at 5 per repository"
+  echo "help: worktrees come from the pool, capped at ${WT_LIMIT:-6} per repository"
   echo "help: run 'wt take <branch>' to get one"
   echo "help: run 'wt' to see what the pool is holding"
   exit 2

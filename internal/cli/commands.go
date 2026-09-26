@@ -88,6 +88,16 @@ type session struct {
 	git   *gitwt.Git
 	svc   *pool.Service
 	reg   *registry.Registry
+	limit int
+}
+
+// pool returns this repository's pool from a registry with the configured cap
+// applied. The cap is never stored, so every registry read under a lock loses
+// it and must come back through here.
+func (s *session) pool(reg *registry.Registry) *pool.Pool {
+	p := reg.For(s.git.Repo)
+	p.Limit = s.limit
+	return p
 }
 
 func open() (*session, error) {
@@ -107,24 +117,40 @@ func open() (*session, error) {
 	if err != nil {
 		return nil, err
 	}
-	p := reg.For(g.Repo)
+	limit, err := limitFromEnv()
+	if err != nil {
+		return nil, err
+	}
+	s := &session{store: store, git: g, reg: reg, limit: limit}
 	// One safety value serves both questions, so the stale-lease check and the
 	// recycle check read the same process snapshot: lsof runs once per command
 	// however many slots are asked about, and the two answers cannot disagree.
 	world := safety{g, liveness.New(), gitwt.NewMerged()}
-	return &session{
-		store: store,
-		git:   g,
-		reg:   reg,
-		svc: &pool.Service{
-			Pool:     p,
-			Git:      adapter{g},
-			Safety:   world,
-			Activity: world,
-			Root:     poolRoot(g.Repo),
-			Now:      time.Now,
-		},
-	}, nil
+	s.svc = &pool.Service{
+		Pool:     s.pool(reg),
+		Git:      adapter{g},
+		Safety:   world,
+		Activity: world,
+		Root:     poolRoot(g.Repo),
+		Now:      time.Now,
+	}
+	return s, nil
+}
+
+// limitFromEnv reads the per-repository cap from WT_LIMIT, or 0 for the
+// default. A value that is set but unusable is an error rather than a quiet
+// fallback: an agent that believes it raised the cap and did not would find out
+// only when the pool refused it.
+func limitFromEnv() (int, error) {
+	v := strings.TrimSpace(os.Getenv("WT_LIMIT"))
+	if v == "" {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 {
+		return 0, fmt.Errorf("WT_LIMIT must be a positive integer, got %q", v)
+	}
+	return n, nil
 }
 
 // poolRoot keeps every pooled worktree in one directory beside the checkout, so
@@ -204,7 +230,7 @@ func take(w io.Writer, flags map[string]string, rest []string) int {
 	var released []pool.Released
 	var full error
 	err = s.store.Update(func(reg *registry.Registry) error {
-		s.svc.Pool = reg.For(s.git.Repo)
+		s.svc.Pool = s.pool(reg)
 		r, err := s.svc.Reconcile()
 		if err != nil {
 			return err
@@ -263,7 +289,7 @@ func takeFailed(w io.Writer, err error, released []pool.Released) int {
 	var full *pool.ErrFull
 	if errors.As(err, &full) {
 		var d toon.Doc
-		d.Field("error", fmt.Sprintf("the pool is full: %d of %d slots", pool.Limit, pool.Limit))
+		d.Field("error", fmt.Sprintf("the pool is full: %d of %d slots", full.Limit, full.Limit))
 		rows := make([][]any, 0, len(full.Blockers))
 		for _, b := range full.Blockers {
 			rows = append(rows, []any{b})
@@ -308,7 +334,7 @@ func done(w io.Writer, _ map[string]string, rest []string) int {
 	}
 
 	err = s.store.Update(func(reg *registry.Registry) error {
-		return reg.For(s.git.Repo).Release(index, time.Now())
+		return s.pool(reg).Release(index, time.Now())
 	})
 	if err != nil {
 		return errorf(w, Fail, err.Error(), "Run `wt` to see the pool")
@@ -335,7 +361,7 @@ func targetIndex(s *session, rest []string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	for _, slot := range s.reg.For(s.git.Repo).Slots {
+	for _, slot := range s.pool(s.reg).Slots {
 		if slot.Path != "" && strings.HasPrefix(cwd, slot.Path) {
 			return slot.Index, nil
 		}
@@ -355,7 +381,7 @@ func drop(w io.Writer, _ map[string]string, rest []string) int {
 
 	var removed string
 	err = s.store.Update(func(reg *registry.Registry) error {
-		p := reg.For(s.git.Repo)
+		p := s.pool(reg)
 		slot := p.Find(index)
 		if slot == nil {
 			// Already gone is the state the caller wanted. Not an error.
@@ -407,7 +433,7 @@ func pin(w io.Writer, flags map[string]string, rest []string) int {
 
 	off := flags["off"] == "true"
 	err = s.store.Update(func(reg *registry.Registry) error {
-		slot := reg.For(s.git.Repo).Find(index)
+		slot := s.pool(reg).Find(index)
 		if slot == nil {
 			return fmt.Errorf("no slot %d", index)
 		}

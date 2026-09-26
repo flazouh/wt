@@ -6,13 +6,14 @@ package pool
 
 import "time"
 
-// Limit is how many worktrees one repository may have at once.
+// DefaultLimit is how many worktrees one repository may have at once, unless
+// the machine says otherwise through WT_LIMIT.
 //
 // Six, because the cost of a worktree is real. The forty-eight that prompted
 // this tool averaged 850 MB each, and together they blocked three releases in
 // one afternoon by holding the machine under the twelve gigabyte floor the
 // build needs. It was five until parallel agent work kept every slot leased.
-const Limit = 6
+const DefaultLimit = 6
 
 // State is what a slot is doing, which decides what may be done to it.
 type State string

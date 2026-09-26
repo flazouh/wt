@@ -26,6 +26,8 @@ var threeDaysAgo = time.Now().Add(-72 * time.Hour)
 func wedged(t *testing.T) (repo string, slots []string) {
 	t.Helper()
 	t.Setenv("WT_STATE_DIR", t.TempDir())
+	// The pool must be full at the default cap, whatever this machine exports.
+	t.Setenv("WT_LIMIT", "")
 	dir := t.TempDir()
 	stamp := threeDaysAgo.UTC().Format(time.RFC3339)
 	for _, args := range [][]string{
@@ -50,7 +52,7 @@ func wedged(t *testing.T) (repo string, slots []string) {
 	}
 	repo = g.Repo
 	root := poolRoot(repo)
-	for i := 1; i <= pool.Limit; i++ {
+	for i := 1; i <= pool.DefaultLimit; i++ {
 		path := pool.SlotPath(root, i)
 		if err := g.Add(path, "work/"+string(rune('0'+i)), "main"); err != nil {
 			t.Fatalf("add slot %d: %v", i, err)

@@ -37,7 +37,7 @@ func home(w io.Writer) int {
 	d.Section("pool", map[string]any{
 		"repo":  collapseHome(s.git.Repo),
 		"used":  len(p.Slots),
-		"limit": pool.Limit,
+		"limit": p.Cap(),
 	})
 
 	rows := make([][]any, 0, len(p.Slots))
@@ -94,14 +94,14 @@ func homeHelp(p *pool.Pool) []string {
 // On failure it returns the unlocked snapshot, so the caller can still show
 // something.
 func reconciled(s *session) (*pool.Pool, []pool.Released, error) {
-	snapshot := s.reg.For(s.git.Repo)
+	snapshot := s.pool(s.reg)
 	if len(snapshot.Slots) == 0 {
 		return snapshot, nil, nil
 	}
 	var p *pool.Pool
 	var released []pool.Released
 	err := s.store.Update(func(reg *registry.Registry) error {
-		s.svc.Pool = reg.For(s.git.Repo)
+		s.svc.Pool = s.pool(reg)
 		r, err := s.svc.Reconcile()
 		if err != nil {
 			return err
