@@ -6,8 +6,9 @@ A capped pool of git worktrees, shared by every agent on this machine.
 
 Six worktrees per repository, or `$WT_LIMIT`. When one more is asked for, the
 least recently used idle one is recycled rather than another being created.
-Nothing is ever recycled while something is working inside it, and a lease
-whose holder died is taken back after two days of silence.
+Nothing is ever recycled while something is working inside it. A lease whose
+holder exited is taken back after half an hour of silence, and any other lease
+after two days.
 
 ## Install
 
@@ -58,10 +59,20 @@ A lease is released by `wt done`, or by the pool itself when the holder has
 plainly gone. Every `take` and every bare `wt` reconciles first. A leased slot
 becomes idle when both of these hold:
 
-- its last activity is more than 48 hours ago. Last activity is the latest of
+- its last activity is more than 48 hours ago, or more than 30 minutes ago when
+  the process that took the lease has exited. Last activity is the latest of
   the lease's own stamp, the modification time of the worktree's git index,
   and the committer date of its HEAD.
 - no live process is working in it.
+
+The process that took the lease is its holder. `take` records it with its
+start time, so a reused PID never passes for the same process. The holder is
+the nearest agent session above `wt` (`claude`, `codex` and the like), or
+failing that the nearest process that is not a throwaway wrapper: a shell run
+with `-c`, `rtk`, `env`, `timeout`. It is never `wt` itself, which exits as soon
+as the lease is written, and never the `zsh -c` an agent's shell tool wraps each
+command in. A lease written before holders were recorded, or one whose holder
+could not be named, stays on the two-day rule.
 
 The index and HEAD are read because the stamp alone lies. An agent often works
 in a worktree through absolute paths while its shell stands elsewhere. It never
@@ -75,8 +86,9 @@ only after passing every safety check, like any other idle slot. The output
 names each released lease in a `released` table, with its old owner and why:
 
 ```
-released[1]{slot,owner,why}:
+released[2]{slot,owner,why}:
   1,alex,"lease released: idle 3d, no live process"
+  4,alex,"lease released: holder exited, idle 2h, no live process"
 ```
 
 A full pool keeps the release. The `take` still fails, but the listing then
