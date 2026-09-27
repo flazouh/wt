@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -206,5 +207,130 @@ func TestALiveProcessKeepsAnAbandonedLease(t *testing.T) {
 	}
 	if got := slotState(t, repo, 1); got != pool.Leased {
 		t.Errorf("slot 1 is %s, want still leased", got)
+	}
+}
+
+// editSlot changes one slot in the registry the command will read.
+func editSlot(t *testing.T, repo string, index int, edit func(*pool.Slot)) {
+	t.Helper()
+	store, err := registry.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = store.Update(func(reg *registry.Registry) error {
+		edit(reg.For(repo).Find(index))
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func readSlot(t *testing.T, repo string, index int) pool.Slot {
+	t.Helper()
+	store, err := registry.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg, err := store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return *reg.For(repo).Find(index)
+}
+
+// The lease must name a process that outlives the command: one above it, never
+// wt itself. Which ancestor depends on who runs the tests. Under an agent it is
+// the agent session; on CI it is the go tool.
+func TestTakeRecordsTheProcessAboveIt(t *testing.T) {
+	repo, _ := wedged(t)
+	editSlot(t, repo, 2, func(s *pool.Slot) { s.State = pool.Idle; s.Owner = "" })
+
+	out, code := run(t, "take", "work/2")
+
+	if code != OK {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	s := readSlot(t, repo, 2)
+	if !ancestors(t)[s.OwnerPID] {
+		t.Errorf("the lease names PID %d, which is not above this process %d", s.OwnerPID, os.Getpid())
+	}
+	if s.OwnerStart == "" {
+		t.Error("the lease records no start time, so it can never be judged by its holder")
+	}
+}
+
+// ancestors is every PID above this process, read from ps.
+func ancestors(t *testing.T) map[int]bool {
+	t.Helper()
+	out, err := exec.Command("ps", "-A", "-o", "pid=,ppid=").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent := map[int]int{}
+	for _, line := range strings.Split(string(out), "\n") {
+		f := strings.Fields(line)
+		if len(f) != 2 {
+			continue
+		}
+		pid, _ := strconv.Atoi(f[0])
+		ppid, _ := strconv.Atoi(f[1])
+		parent[pid] = ppid
+	}
+	above := map[int]bool{}
+	for pid := parent[os.Getpid()]; pid > 1 && !above[pid]; pid = parent[pid] {
+		above[pid] = true
+	}
+	return above
+}
+
+// The wedge as it was found the second time: every holder had exited hours
+// before, and the two-day rule had not come round. The start time recorded is
+// not this PID's, which is exactly how a reused PID looks.
+func TestTakeRecyclesALeaseWhoseHolderExited(t *testing.T) {
+	repo, _ := wedged(t)
+	editSlot(t, repo, 1, func(s *pool.Slot) {
+		s.Used = time.Now().Add(-time.Hour)
+		s.OwnerPID = os.Getpid()
+		s.OwnerStart = "Thu Jan  1 00:00:00 1970"
+	})
+
+	out, code := run(t, "take", "feature/new", "--owner", "codex")
+
+	if code != OK {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	for _, want := range []string{"action: recycled", "slot: 1", `1,alex,"lease released: holder exited, idle 1h, no live process"`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output is missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// The same hour-old lease, held by a process that still runs, stays leased.
+func TestALiveHolderKeepsItsLease(t *testing.T) {
+	repo, _ := wedged(t)
+	editSlot(t, repo, 1, func(s *pool.Slot) { s.Used = time.Now().Add(-time.Hour) })
+	holder := exec.Command("sleep", "30")
+	if err := holder.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = holder.Process.Kill(); _ = holder.Wait() })
+	out, err := exec.Command("ps", "-o", "lstart=", "-p", strconv.Itoa(holder.Process.Pid)).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	editSlot(t, repo, 1, func(s *pool.Slot) {
+		s.OwnerPID = holder.Process.Pid
+		s.OwnerStart = strings.Join(strings.Fields(string(out)), " ")
+	})
+
+	listing, code := run(t)
+
+	if code != OK {
+		t.Fatalf("exit %d:\n%s", code, listing)
+	}
+	if strings.Contains(listing, "lease released") {
+		t.Errorf("released a lease whose holder runs:\n%s", listing)
 	}
 }

@@ -359,4 +359,3 @@ func TestReleaseForgetsTheOwner(t *testing.T) {
 		t.Fatalf("released slot keeps pid %d start %q", s.OwnerPID, s.OwnerStart)
 	}
 }
-

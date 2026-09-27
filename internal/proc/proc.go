@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // ErrUnavailable means the process table could not be read. Callers must keep
@@ -113,6 +114,40 @@ func throwaway(p Process) bool {
 		}
 	}
 	return false
+}
+
+// Snapshot reads the table on the first question and answers every later one
+// from that reading, so one command runs ps once however many leases it asks
+// about, and the answers cannot disagree with each other.
+type Snapshot struct {
+	once  sync.Once
+	table Table
+	err   error
+}
+
+// NewSnapshot returns a snapshot that has not yet read anything.
+func NewSnapshot() *Snapshot { return &Snapshot{} }
+
+func (s *Snapshot) load() error {
+	s.once.Do(func() { s.table, s.err = Read() })
+	return s.err
+}
+
+// Alive is Table.Alive on the snapshot. It fails, rather than answering no,
+// when the table could not be read.
+func (s *Snapshot) Alive(pid int, start string) (bool, error) {
+	if err := s.load(); err != nil {
+		return false, err
+	}
+	return s.table.Alive(pid, start), nil
+}
+
+// Holder is Table.Holder on the snapshot. An unreadable table names no holder.
+func (s *Snapshot) Holder(from int) (Process, bool) {
+	if s.load() != nil {
+		return Process{}, false
+	}
+	return s.table.Holder(from)
 }
 
 // Read takes one snapshot of every process.
