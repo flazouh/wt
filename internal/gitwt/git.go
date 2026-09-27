@@ -328,23 +328,24 @@ func (g *Git) List() ([]Worktree, error) {
 	return trees, nil
 }
 
-// Add creates a worktree at path on branch, creating the branch from base when
-// it does not exist yet.
+// Add creates a worktree at path on branch. A local branch is used as it is. A
+// branch that exists only on origin is created from it and set to track it, so
+// taking a branch someone pushed lands on their work. Only a branch found in
+// neither place is cut from base.
 func (g *Git) Add(path, branch, base string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	if g.hasBranch(branch) {
+	if g.resolves(g.Repo, "refs/heads/"+branch) {
 		_, err := g.run(g.Repo, "worktree", "add", path, branch)
+		return err
+	}
+	if remote := "refs/remotes/origin/" + branch; g.resolves(g.Repo, remote) {
+		_, err := g.run(g.Repo, "worktree", "add", "--track", "-b", branch, path, remote)
 		return err
 	}
 	_, err := g.run(g.Repo, "worktree", "add", "-b", branch, path, base)
 	return err
-}
-
-func (g *Git) hasBranch(branch string) bool {
-	_, err := g.run(g.Repo, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch)
-	return err == nil
 }
 
 // Remove tears down a worktree and prunes the administrative entry.
