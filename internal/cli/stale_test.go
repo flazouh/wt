@@ -10,6 +10,7 @@ import (
 
 	"github.com/flazouh/wt/internal/gitwt"
 	"github.com/flazouh/wt/internal/pool"
+	"github.com/flazouh/wt/internal/proc"
 	"github.com/flazouh/wt/internal/registry"
 )
 
@@ -206,5 +207,146 @@ func TestALiveProcessKeepsAnAbandonedLease(t *testing.T) {
 	}
 	if got := slotState(t, repo, 1); got != pool.Leased {
 		t.Errorf("slot 1 is %s, want still leased", got)
+	}
+}
+
+// editSlot changes one slot in the registry the command will read.
+func editSlot(t *testing.T, repo string, index int, edit func(*pool.Slot)) {
+	t.Helper()
+	store, err := registry.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = store.Update(func(reg *registry.Registry) error {
+		edit(reg.For(repo).Find(index))
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func readSlot(t *testing.T, repo string, index int) pool.Slot {
+	t.Helper()
+	store, err := registry.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg, err := store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return *reg.For(repo).Find(index)
+}
+
+// fakeAgent is set when this test binary runs as the agent in
+// TestTakeRecordsTheAgentAboveIt, under a copy named claude.
+const fakeAgent = "WT_TEST_FAKE_AGENT"
+
+func TestMain(m *testing.M) {
+	if os.Getenv(fakeAgent) != "" {
+		// An agent's shell tool: a throwaway sh -c, with two commands so the
+		// shell cannot exec wt in its own place.
+		cmd := exec.Command("sh", "-c", `"$WT" take work/2; status=$?; exit $status`)
+		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+		if err := cmd.Run(); err != nil {
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
+// The lease must name the agent above the command, never wt itself. The
+// holder a test process would get depends on who runs the tests, so wt is
+// built and run the way an agent runs it: under a process named claude,
+// through a shell that exits with the command. The agent is a copy of this
+// test binary, since macOS kills a renamed copy of a system binary.
+func TestTakeRecordsTheAgentAboveIt(t *testing.T) {
+	bin := t.TempDir()
+	wt := filepath.Join(bin, "wt")
+	if out, err := exec.Command("go", "build", "-o", wt, "../../cmd/wt").CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, err := os.ReadFile(self)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent := filepath.Join(bin, "claude")
+	if err := os.WriteFile(agent, image, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	repo, _ := wedged(t)
+	editSlot(t, repo, 2, func(s *pool.Slot) { s.State = pool.Idle; s.Owner = "" })
+
+	cmd := exec.Command(agent)
+	cmd.Env = append(os.Environ(), fakeAgent+"=1", "WT="+wt)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("wt take under the agent: %v\n%s", err, out)
+	}
+
+	s := readSlot(t, repo, 2)
+	if s.OwnerPID != cmd.Process.Pid {
+		t.Errorf("the lease names PID %d, want the agent %d\n%s", s.OwnerPID, cmd.Process.Pid, out)
+	}
+	if s.OwnerStart.IsZero() {
+		t.Error("the lease records no start time, so it can never be judged by its holder")
+	}
+}
+
+// The wedge as it was found the second time: every holder had exited hours
+// before, and the two-day rule had not come round. The start time recorded is
+// not this PID's, which is exactly how a reused PID looks.
+func TestTakeRecyclesALeaseWhoseHolderExited(t *testing.T) {
+	repo, _ := wedged(t)
+	editSlot(t, repo, 1, func(s *pool.Slot) {
+		s.Used = time.Now().Add(-time.Hour)
+		s.OwnerPID = os.Getpid()
+		s.OwnerStart = time.Unix(0, 0)
+	})
+
+	out, code := run(t, "take", "feature/new", "--owner", "codex")
+
+	if code != OK {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	for _, want := range []string{"action: recycled", "slot: 1", `1,alex,"lease released: holder exited, idle 1h, no live process"`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output is missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// The same hour-old lease, held by a process that still runs, stays leased.
+func TestALiveHolderKeepsItsLease(t *testing.T) {
+	repo, _ := wedged(t)
+	editSlot(t, repo, 1, func(s *pool.Slot) { s.Used = time.Now().Add(-time.Hour) })
+	holder := exec.Command("sleep", "30")
+	if err := holder.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = holder.Process.Kill(); _ = holder.Wait() })
+	table, err := proc.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	editSlot(t, repo, 1, func(s *pool.Slot) {
+		s.OwnerPID = holder.Process.Pid
+		s.OwnerStart = table[holder.Process.Pid].Start
+	})
+
+	listing, code := run(t)
+
+	if code != OK {
+		t.Fatalf("exit %d:\n%s", code, listing)
+	}
+	if strings.Contains(listing, "lease released") {
+		t.Errorf("released a lease whose holder runs:\n%s", listing)
 	}
 }

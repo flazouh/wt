@@ -13,6 +13,7 @@ import (
 	"github.com/flazouh/wt/internal/gitwt"
 	"github.com/flazouh/wt/internal/liveness"
 	"github.com/flazouh/wt/internal/pool"
+	"github.com/flazouh/wt/internal/proc"
 	"github.com/flazouh/wt/internal/registry"
 	"github.com/flazouh/wt/internal/toon"
 )
@@ -89,6 +90,7 @@ type session struct {
 	svc   *pool.Service
 	reg   *registry.Registry
 	limit int
+	procs *proc.Snapshot
 }
 
 // pool returns this repository's pool from a registry with the configured cap
@@ -125,7 +127,8 @@ func open() (*session, error) {
 	// One safety value serves both questions, so the stale-lease check and the
 	// recycle check read the same process snapshot: lsof runs once per command
 	// however many slots are asked about, and the two answers cannot disagree.
-	world := safety{g, liveness.New(), gitwt.NewMerged()}
+	world := safety{g, liveness.New(), gitwt.NewMerged(), proc.NewSnapshot()}
+	s.procs = world.procs
 	s.svc = &pool.Service{
 		Pool:     s.pool(reg),
 		Git:      adapter{g},
@@ -185,13 +188,30 @@ type safety struct {
 	g      *gitwt.Git
 	probe  *liveness.Probe
 	merged *gitwt.Merged
+	procs  *proc.Snapshot
 }
 
 func (s safety) InUse(path string) (bool, error) { return s.probe.InUse(path) }
 func (s safety) Dirty(path string) (bool, error) { return s.g.Dirty(path) }
 
-// LastTouched is the other half of pool.Activity, beside InUse.
+// LastTouched and OwnerAlive are the rest of pool.Activity, beside InUse.
 func (s safety) LastTouched(path string) (time.Time, error) { return s.g.LastTouched(path) }
+func (s safety) OwnerAlive(pid int, start time.Time) (bool, error) {
+	return s.procs.Alive(pid, start)
+}
+
+// holderOf names the process that is taking a lease: the agent session or
+// terminal shell above this command, never wt itself, which exits as soon as
+// the lease is written. The zero Holder, when none is found or the process
+// table cannot be read, leaves the lease on the two-day rule; neither is a
+// reason to refuse the take.
+func holderOf(procs *proc.Snapshot) pool.Holder {
+	p, ok, err := procs.Holder(os.Getppid())
+	if err != nil || !ok {
+		return pool.Holder{}
+	}
+	return pool.Holder{PID: p.PID, Start: p.Start}
+}
 
 // Unpushed asks git, then forgives the one case git cannot see.
 //
@@ -225,6 +245,10 @@ func take(w io.Writer, flags map[string]string, rest []string) int {
 		owner = defaultOwner()
 	}
 
+	// Named before the registry is locked: the process table is read once and
+	// takes longer than anything else the lock guards.
+	holder := holderOf(s.procs)
+
 	var slot *pool.Slot
 	var action string
 	var released []pool.Released
@@ -236,7 +260,7 @@ func take(w io.Writer, flags map[string]string, rest []string) int {
 			return err
 		}
 		released = r.Released
-		slot, action, err = s.svc.Acquire(branch, owner, os.Getpid())
+		slot, action, err = s.svc.Acquire(branch, owner, holder)
 		// A full pool is a verdict, not a failure, and it changes nothing: the
 		// pool decides it before touching a slot. So what Reconcile found is
 		// still written. A lease taken back from a dead session stays taken

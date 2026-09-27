@@ -165,19 +165,19 @@ type Plan struct {
 // The order is deliberate: reuse before create, create before recycle. Recycle
 // is last because it is the only one that destroys something, and the least
 // recently used idle slot is the one whose loss costs least.
-func (p *Pool) Acquire(branch, owner string, pid int, safe Safety, now time.Time) (*Plan, error) {
+func (p *Pool) Acquire(branch, owner string, holder Holder, safe Safety, now time.Time) (*Plan, error) {
 	if branch == "" {
 		return nil, errors.New("a branch is required")
 	}
 
 	if s := p.OnBranch(branch); s != nil {
-		lease(s, owner, pid, now)
+		lease(s, owner, holder, now)
 		return &Plan{Slot: s, Reuse: true}, nil
 	}
 
 	if index, ok := p.freeIndex(); ok {
 		s := &Slot{Index: index, Repo: p.Repo, Branch: branch, Created: now}
-		lease(s, owner, pid, now)
+		lease(s, owner, holder, now)
 		p.Slots = append(p.Slots, s)
 		return &Plan{Slot: s, Create: true}, nil
 	}
@@ -193,7 +193,7 @@ func (p *Pool) Acquire(branch, owner string, pid int, safe Safety, now time.Time
 	evicted := victim.Path
 	victim.Branch = branch
 	victim.Path = ""
-	lease(victim, owner, pid, now)
+	lease(victim, owner, holder, now)
 	return &Plan{Slot: victim, Recycle: true, Evicted: evicted}, nil
 }
 
@@ -231,11 +231,18 @@ func (p *Pool) victim(safe Safety) (*Slot, []string, error) {
 	return nil, blockers, nil
 }
 
-func lease(s *Slot, owner string, pid int, now time.Time) {
+func lease(s *Slot, owner string, holder Holder, now time.Time) {
 	s.State = Leased
 	s.Owner = owner
-	s.OwnerPID = pid
+	s.OwnerPID = holder.PID
+	s.OwnerStart = holder.Start
 	s.Used = now
+}
+
+// Holder is the process that takes a lease. The zero value records none.
+type Holder struct {
+	PID   int
+	Start time.Time
 }
 
 // Release hands a slot back. The worktree stays on disk: that is the whole
@@ -251,6 +258,7 @@ func (p *Pool) Release(index int, now time.Time) error {
 	s.State = Idle
 	s.Owner = ""
 	s.OwnerPID = 0
+	s.OwnerStart = time.Time{}
 	s.Used = now
 	return nil
 }

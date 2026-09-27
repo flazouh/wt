@@ -6,8 +6,9 @@ A capped pool of git worktrees, shared by every agent on this machine.
 
 Six worktrees per repository, or `$WT_LIMIT`. When one more is asked for, the
 least recently used idle one is recycled rather than another being created.
-Nothing is ever recycled while something is working inside it, and a lease
-whose holder died is taken back after two days of silence.
+Nothing is ever recycled while something is working inside it. A lease whose
+holder exited is taken back after half an hour of silence, and any other lease
+after two days.
 
 ## Install
 
@@ -58,10 +59,25 @@ A lease is released by `wt done`, or by the pool itself when the holder has
 plainly gone. Every `take` and every bare `wt` reconciles first. A leased slot
 becomes idle when both of these hold:
 
-- its last activity is more than 48 hours ago. Last activity is the latest of
+- its last activity is more than 48 hours ago, or more than 30 minutes ago when
+  the process that took the lease has exited. Last activity is the latest of
   the lease's own stamp, the modification time of the worktree's git index,
   and the committer date of its HEAD.
 - no live process is working in it.
+
+The process that took the lease is its holder. `take` records it with its
+start time, so a reused PID never passes for the same process. The holder is
+the nearest agent session above `wt` (`claude`, `codex` and the like), or
+failing that the nearest interactive shell: the terminal a person typed in.
+It is never `wt` itself, which exits as soon as the lease is written, never the
+`zsh -c` an agent's shell tool wraps each command in, and never a script, a
+`make` or an `npm run`, which exit while the work goes on.
+
+When no agent or terminal is found, no holder is recorded, and the lease stays
+on the two-day rule. So does a lease written before holders were recorded. A
+holder that outlives the work, such as an agent session left open, also keeps
+its lease until two days of silence; `wt done` is still the way to hand one
+back early.
 
 The index and HEAD are read because the stamp alone lies. An agent often works
 in a worktree through absolute paths while its shell stands elsewhere. It never
@@ -75,8 +91,9 @@ only after passing every safety check, like any other idle slot. The output
 names each released lease in a `released` table, with its old owner and why:
 
 ```
-released[1]{slot,owner,why}:
+released[2]{slot,owner,why}:
   1,alex,"lease released: idle 3d, no live process"
+  4,alex,"lease released: holder exited, idle 2h, no live process"
 ```
 
 A full pool keeps the release. The `take` still fails, but the listing then
