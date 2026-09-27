@@ -4,7 +4,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -240,49 +239,65 @@ func readSlot(t *testing.T, repo string, index int) pool.Slot {
 	return *reg.For(repo).Find(index)
 }
 
-// The lease must name a process that outlives the command: one above it, never
-// wt itself. Which ancestor depends on who runs the tests. Under an agent it is
-// the agent session; on CI it is the go tool.
-func TestTakeRecordsTheProcessAboveIt(t *testing.T) {
+// fakeAgent is set when this test binary runs as the agent in
+// TestTakeRecordsTheAgentAboveIt, under a copy named claude.
+const fakeAgent = "WT_TEST_FAKE_AGENT"
+
+func TestMain(m *testing.M) {
+	if os.Getenv(fakeAgent) != "" {
+		// An agent's shell tool: a throwaway sh -c, with two commands so the
+		// shell cannot exec wt in its own place.
+		cmd := exec.Command("sh", "-c", `"$WT" take work/2; status=$?; exit $status`)
+		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+		if err := cmd.Run(); err != nil {
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
+// The lease must name the agent above the command, never wt itself. The
+// holder a test process would get depends on who runs the tests, so wt is
+// built and run the way an agent runs it: under a process named claude,
+// through a shell that exits with the command. The agent is a copy of this
+// test binary, since macOS kills a renamed copy of a system binary.
+func TestTakeRecordsTheAgentAboveIt(t *testing.T) {
+	bin := t.TempDir()
+	wt := filepath.Join(bin, "wt")
+	if out, err := exec.Command("go", "build", "-o", wt, "../../cmd/wt").CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, err := os.ReadFile(self)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent := filepath.Join(bin, "claude")
+	if err := os.WriteFile(agent, image, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
 	repo, _ := wedged(t)
 	editSlot(t, repo, 2, func(s *pool.Slot) { s.State = pool.Idle; s.Owner = "" })
 
-	out, code := run(t, "take", "work/2")
-
-	if code != OK {
-		t.Fatalf("exit %d:\n%s", code, out)
+	cmd := exec.Command(agent)
+	cmd.Env = append(os.Environ(), fakeAgent+"=1", "WT="+wt)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("wt take under the agent: %v\n%s", err, out)
 	}
+
 	s := readSlot(t, repo, 2)
-	if !ancestors(t)[s.OwnerPID] {
-		t.Errorf("the lease names PID %d, which is not above this process %d", s.OwnerPID, os.Getpid())
+	if s.OwnerPID != cmd.Process.Pid {
+		t.Errorf("the lease names PID %d, want the agent %d\n%s", s.OwnerPID, cmd.Process.Pid, out)
 	}
 	if s.OwnerStart.IsZero() {
 		t.Error("the lease records no start time, so it can never be judged by its holder")
 	}
-}
-
-// ancestors is every PID above this process, read from ps.
-func ancestors(t *testing.T) map[int]bool {
-	t.Helper()
-	out, err := exec.Command("ps", "-A", "-o", "pid=,ppid=").Output()
-	if err != nil {
-		t.Fatal(err)
-	}
-	parent := map[int]int{}
-	for _, line := range strings.Split(string(out), "\n") {
-		f := strings.Fields(line)
-		if len(f) != 2 {
-			continue
-		}
-		pid, _ := strconv.Atoi(f[0])
-		ppid, _ := strconv.Atoi(f[1])
-		parent[pid] = ppid
-	}
-	above := map[int]bool{}
-	for pid := parent[os.Getpid()]; pid > 1 && !above[pid]; pid = parent[pid] {
-		above[pid] = true
-	}
-	return above
 }
 
 // The wedge as it was found the second time: every holder had exited hours
