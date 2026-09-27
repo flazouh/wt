@@ -41,7 +41,7 @@ type Activity interface {
 	// OwnerAlive reports whether the process that started at start still runs
 	// as pid. An error keeps the lease: an unreadable process table is never
 	// "every holder has exited".
-	OwnerAlive(pid int, start string) (bool, error)
+	OwnerAlive(pid int, start time.Time) (bool, error)
 }
 
 // Released is one lease the pool took back, for the caller to report. A lease
@@ -109,7 +109,7 @@ func (p *Pool) ReleaseStale(world Activity, now time.Time) []Released {
 		// wt's own PID, which exited the moment the lease was written.
 		threshold := StaleLease
 		gone := false
-		if s.OwnerStart != "" {
+		if !s.OwnerStart.IsZero() {
 			alive, err := world.OwnerAlive(s.OwnerPID, s.OwnerStart)
 			if err != nil {
 				continue
@@ -143,7 +143,7 @@ func (p *Pool) ReleaseStale(world Activity, now time.Time) []Released {
 		s.State = Idle
 		s.Owner = ""
 		s.OwnerPID = 0
-		s.OwnerStart = ""
+		s.OwnerStart = time.Time{}
 		s.Used = last
 	}
 	return released

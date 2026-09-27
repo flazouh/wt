@@ -90,7 +90,7 @@ type session struct {
 	svc   *pool.Service
 	reg   *registry.Registry
 	limit int
-	world safety
+	procs *proc.Snapshot
 }
 
 // pool returns this repository's pool from a registry with the configured cap
@@ -128,7 +128,7 @@ func open() (*session, error) {
 	// recycle check read the same process snapshot: lsof runs once per command
 	// however many slots are asked about, and the two answers cannot disagree.
 	world := safety{g, liveness.New(), gitwt.NewMerged(), proc.NewSnapshot()}
-	s.world = world
+	s.procs = world.procs
 	s.svc = &pool.Service{
 		Pool:     s.pool(reg),
 		Git:      adapter{g},
@@ -196,17 +196,18 @@ func (s safety) Dirty(path string) (bool, error) { return s.g.Dirty(path) }
 
 // LastTouched and OwnerAlive are the rest of pool.Activity, beside InUse.
 func (s safety) LastTouched(path string) (time.Time, error) { return s.g.LastTouched(path) }
-func (s safety) OwnerAlive(pid int, start string) (bool, error) {
+func (s safety) OwnerAlive(pid int, start time.Time) (bool, error) {
 	return s.procs.Alive(pid, start)
 }
 
-// holder names the process that is taking a lease: the agent session or
+// holderOf names the process that is taking a lease: the agent session or
 // terminal shell above this command, never wt itself, which exits as soon as
-// the lease is written. The zero Holder, when none is found, leaves the lease on
-// the two-day rule.
-func (s safety) holder() pool.Holder {
-	p, ok := s.procs.Holder(os.Getppid())
-	if !ok {
+// the lease is written. The zero Holder, when none is found or the process
+// table cannot be read, leaves the lease on the two-day rule; neither is a
+// reason to refuse the take.
+func holderOf(procs *proc.Snapshot) pool.Holder {
+	p, ok, err := procs.Holder(os.Getppid())
+	if err != nil || !ok {
 		return pool.Holder{}
 	}
 	return pool.Holder{PID: p.PID, Start: p.Start}
@@ -246,7 +247,7 @@ func take(w io.Writer, flags map[string]string, rest []string) int {
 
 	// Named before the registry is locked: the process table is read once and
 	// takes longer than anything else the lock guards.
-	holder := s.world.holder()
+	holder := holderOf(s.procs)
 
 	var slot *pool.Slot
 	var action string

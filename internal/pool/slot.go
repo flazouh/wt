@@ -43,9 +43,9 @@ type Slot struct {
 	OwnerPID int    `json:"ownerPid,omitempty"`
 	// OwnerStart is when the holding process started. With OwnerPID it names
 	// one process, so a lease can tell its holder has exited even after the PID
-	// is reused. Empty on leases written before holders were recorded, whose
+	// is reused. Zero on leases written before holders were recorded, whose
 	// OwnerPID was wt's own and says nothing about the session.
-	OwnerStart string    `json:"ownerStart,omitempty"`
+	OwnerStart time.Time `json:"ownerStart,omitzero"`
 	Created    time.Time `json:"created"`
 	Used       time.Time `json:"used"`
 }

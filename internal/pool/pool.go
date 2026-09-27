@@ -242,7 +242,7 @@ func lease(s *Slot, owner string, holder Holder, now time.Time) {
 // Holder is the process that takes a lease. The zero value records none.
 type Holder struct {
 	PID   int
-	Start string
+	Start time.Time
 }
 
 // Release hands a slot back. The worktree stays on disk: that is the whole
@@ -258,7 +258,7 @@ func (p *Pool) Release(index int, now time.Time) error {
 	s.State = Idle
 	s.Owner = ""
 	s.OwnerPID = 0
-	s.OwnerStart = ""
+	s.OwnerStart = time.Time{}
 	s.Used = now
 	return nil
 }

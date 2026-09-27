@@ -11,6 +11,7 @@ import (
 
 	"github.com/flazouh/wt/internal/gitwt"
 	"github.com/flazouh/wt/internal/pool"
+	"github.com/flazouh/wt/internal/proc"
 	"github.com/flazouh/wt/internal/registry"
 )
 
@@ -255,7 +256,7 @@ func TestTakeRecordsTheProcessAboveIt(t *testing.T) {
 	if !ancestors(t)[s.OwnerPID] {
 		t.Errorf("the lease names PID %d, which is not above this process %d", s.OwnerPID, os.Getpid())
 	}
-	if s.OwnerStart == "" {
+	if s.OwnerStart.IsZero() {
 		t.Error("the lease records no start time, so it can never be judged by its holder")
 	}
 }
@@ -292,7 +293,7 @@ func TestTakeRecyclesALeaseWhoseHolderExited(t *testing.T) {
 	editSlot(t, repo, 1, func(s *pool.Slot) {
 		s.Used = time.Now().Add(-time.Hour)
 		s.OwnerPID = os.Getpid()
-		s.OwnerStart = "Thu Jan  1 00:00:00 1970"
+		s.OwnerStart = time.Unix(0, 0)
 	})
 
 	out, code := run(t, "take", "feature/new", "--owner", "codex")
@@ -316,13 +317,13 @@ func TestALiveHolderKeepsItsLease(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = holder.Process.Kill(); _ = holder.Wait() })
-	out, err := exec.Command("ps", "-o", "lstart=", "-p", strconv.Itoa(holder.Process.Pid)).Output()
+	table, err := proc.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
 	editSlot(t, repo, 1, func(s *pool.Slot) {
 		s.OwnerPID = holder.Process.Pid
-		s.OwnerStart = strings.Join(strings.Fields(string(out)), " ")
+		s.OwnerStart = table[holder.Process.Pid].Start
 	})
 
 	listing, code := run(t)

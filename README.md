@@ -68,11 +68,16 @@ becomes idle when both of these hold:
 The process that took the lease is its holder. `take` records it with its
 start time, so a reused PID never passes for the same process. The holder is
 the nearest agent session above `wt` (`claude`, `codex` and the like), or
-failing that the nearest process that is not a throwaway wrapper: a shell run
-with `-c`, `rtk`, `env`, `timeout`. It is never `wt` itself, which exits as soon
-as the lease is written, and never the `zsh -c` an agent's shell tool wraps each
-command in. A lease written before holders were recorded, or one whose holder
-could not be named, stays on the two-day rule.
+failing that the nearest interactive shell: the terminal a person typed in.
+It is never `wt` itself, which exits as soon as the lease is written, never the
+`zsh -c` an agent's shell tool wraps each command in, and never a script, a
+`make` or an `npm run`, which exit while the work goes on.
+
+When no agent or terminal is found, no holder is recorded, and the lease stays
+on the two-day rule. So does a lease written before holders were recorded. A
+holder that outlives the work, such as an agent session left open, also keeps
+its lease until two days of silence; `wt done` is still the way to hand one
+back early.
 
 The index and HEAD are read because the stamp alone lies. An agent often works
 in a worktree through absolute paths while its shell stands elsewhere. It never

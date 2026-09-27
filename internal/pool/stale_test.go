@@ -22,8 +22,8 @@ type activity struct {
 	asked    []string
 }
 
-func (a *activity) OwnerAlive(pid int, start string) (bool, error) {
-	a.asked = append(a.asked, "owner:"+start)
+func (a *activity) OwnerAlive(pid int, start time.Time) (bool, error) {
+	a.asked = append(a.asked, "owner:"+start.String())
 	if a.ownerErr != nil {
 		return false, a.ownerErr
 	}
@@ -239,7 +239,7 @@ func ownedPool(t *testing.T, now time.Time) (*Pool, *activity) {
 	p, world := leasedPool(t, now)
 	for _, s := range p.Slots {
 		s.OwnerPID = 100 + s.Index
-		s.OwnerStart = "started"
+		s.OwnerStart = now.Add(-24 * time.Hour)
 		s.Used = now.Add(-5 * time.Minute)
 		world.touched[s.Path] = s.Used
 	}
@@ -266,7 +266,7 @@ func TestALeaseWhoseOwnerExitedIsReleasedWithoutWaitingTwoDays(t *testing.T) {
 		t.Error("the release does not say the owner exited")
 	}
 	s := p.Slots[0]
-	if s.State != Idle || s.OwnerPID != 0 || s.OwnerStart != "" {
+	if s.State != Idle || s.OwnerPID != 0 || !s.OwnerStart.IsZero() {
 		t.Fatalf("slot 1 is %s pid %d start %q, want idle with no owner", s.State, s.OwnerPID, s.OwnerStart)
 	}
 }
@@ -335,14 +335,14 @@ func TestAnUnreadableProcessTableKeepsEveryLease(t *testing.T) {
 func TestALeaseWithNoRecordedStartKeepsTheTwoDayRule(t *testing.T) {
 	now := epoch
 	p, world := ownedPool(t, now)
-	p.Slots[0].OwnerStart = ""
+	p.Slots[0].OwnerStart = time.Time{}
 	world.gone[p.Slots[0].OwnerPID] = true
 
 	if released := p.ReleaseStale(world, now); len(released) != 0 {
 		t.Fatalf("released %v on a PID that was never the holder", released)
 	}
 	for _, q := range world.asked {
-		if q == "owner:" {
+		if q == "owner:"+(time.Time{}).String() {
 			t.Fatalf("asked the process table about a lease with no recorded owner: %v", world.asked)
 		}
 	}
@@ -355,7 +355,7 @@ func TestReleaseForgetsTheOwner(t *testing.T) {
 	if err := p.Release(1, now); err != nil {
 		t.Fatal(err)
 	}
-	if s := p.Slots[0]; s.OwnerPID != 0 || s.OwnerStart != "" {
+	if s := p.Slots[0]; s.OwnerPID != 0 || !s.OwnerStart.IsZero() {
 		t.Fatalf("released slot keeps pid %d start %q", s.OwnerPID, s.OwnerStart)
 	}
 }
