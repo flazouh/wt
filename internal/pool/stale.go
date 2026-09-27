@@ -17,6 +17,17 @@ import "time"
 // stamp, and it is only ever half of the decision. See ReleaseStale.
 const StaleLease = 48 * time.Hour
 
+// OwnerGoneGrace is how long a lease whose holder has exited may sit with no
+// sign of life before the pool takes it back.
+//
+// The two-day rule alone let the pool sit at twenty of twenty with every holder
+// long dead, because a slot idle for four hours or eighteen was not yet two days
+// idle. When the holder is known to have exited there is nothing to wait for
+// but a mistake in naming the holder: a launcher taken for the session while
+// the agent works on. Half an hour of silence covers that, and a stamp, an
+// index or a HEAD that moves inside it keeps the lease.
+const OwnerGoneGrace = 30 * time.Minute
+
 // Activity answers the two questions a stale lease is judged by. The pool asks
 // them and never answers them, for the same reason it never answers Safety.
 type Activity interface {
@@ -27,6 +38,10 @@ type Activity interface {
 	// InUse reports whether a live process is sitting in the path. An error
 	// keeps the lease: "the probe failed" is never "nothing is there".
 	InUse(path string) (bool, error)
+	// OwnerAlive reports whether the process that started at start still runs
+	// as pid. An error keeps the lease: an unreadable process table is never
+	// "every holder has exited".
+	OwnerAlive(pid int, start string) (bool, error)
 }
 
 // Released is one lease the pool took back, for the caller to report. A lease
@@ -36,6 +51,9 @@ type Released struct {
 	Owner string
 	// Idle is how long before now the last sign of life was.
 	Idle time.Duration
+	// OwnerGone is true when the lease went because its holder exited, rather
+	// than after two days of silence.
+	OwnerGone bool
 }
 
 // ReleaseStale takes back every lease whose holder has plainly gone away, and
@@ -48,8 +66,10 @@ type Released struct {
 //   - it has a worktree: a lease with no path is an acquire that stopped part
 //     way, and a slot whose directory is in an unknown state must not be handed
 //     to anyone else;
-//   - the latest sign of life is more than StaleLease ago, where the signs are
-//     the lease's own stamp and whatever git last saw happen in the worktree;
+//   - the latest sign of life is more than StaleLease ago, or more than
+//     OwnerGoneGrace ago when the process that took the lease has exited. The
+//     signs are the lease's own stamp and whatever git last saw happen in the
+//     worktree;
 //   - no live process is working in it.
 //
 // Git's view is asked because the stamp alone lies. An agent session often
@@ -71,7 +91,8 @@ type Released struct {
 // The stamp is checked first, and alone, because it costs nothing: it is a
 // lower bound on the last sign of life, so a lease used within the threshold is
 // fresh whatever git says, and neither git nor the second-long process probe is
-// asked about it.
+// asked about it. The holder is asked next, and only about leases that recorded
+// one, because its answer decides which threshold applies.
 func (p *Pool) ReleaseStale(world Activity, now time.Time) []Released {
 	var released []Released
 	for _, s := range p.Slots {
@@ -79,7 +100,26 @@ func (p *Pool) ReleaseStale(world Activity, now time.Time) []Released {
 			continue
 		}
 		last := s.Used
-		if now.Sub(last) <= StaleLease {
+		if now.Sub(last) <= OwnerGoneGrace {
+			continue
+		}
+
+		// Only a lease that recorded its holder's start time can be judged by
+		// the holder. The PID alone may have been reused, and older leases hold
+		// wt's own PID, which exited the moment the lease was written.
+		threshold := StaleLease
+		gone := false
+		if s.OwnerStart != "" {
+			alive, err := world.OwnerAlive(s.OwnerPID, s.OwnerStart)
+			if err != nil {
+				continue
+			}
+			if !alive {
+				threshold = OwnerGoneGrace
+				gone = true
+			}
+		}
+		if now.Sub(last) <= threshold {
 			continue
 		}
 
@@ -90,7 +130,7 @@ func (p *Pool) ReleaseStale(world Activity, now time.Time) []Released {
 		if touched.After(last) {
 			last = touched
 		}
-		if now.Sub(last) <= StaleLease {
+		if now.Sub(last) <= threshold {
 			continue
 		}
 
@@ -99,10 +139,11 @@ func (p *Pool) ReleaseStale(world Activity, now time.Time) []Released {
 			continue
 		}
 
-		released = append(released, Released{Index: s.Index, Owner: s.Owner, Idle: now.Sub(last)})
+		released = append(released, Released{Index: s.Index, Owner: s.Owner, Idle: now.Sub(last), OwnerGone: gone})
 		s.State = Idle
 		s.Owner = ""
 		s.OwnerPID = 0
+		s.OwnerStart = ""
 		s.Used = last
 	}
 	return released

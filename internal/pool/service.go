@@ -46,9 +46,9 @@ func SlotPath(root string, index int) string {
 // Everything that touches disk happens after the decision, and a failure part
 // way through leaves the slot marked leased rather than silently free: a slot
 // whose directory is in an unknown state must not be handed to someone else.
-func (s *Service) Acquire(branch, owner string, pid int) (*Slot, string, error) {
+func (s *Service) Acquire(branch, owner string, holder Holder) (*Slot, string, error) {
 	now := s.Now()
-	plan, err := s.Pool.Acquire(branch, owner, pid, s.Safety, now)
+	plan, err := s.Pool.Acquire(branch, owner, holder, s.Safety, now)
 	if err != nil {
 		return nil, "", err
 	}

@@ -34,15 +34,20 @@ const (
 // so a directory on disk can always be traced back to a registry entry without
 // consulting anything else.
 type Slot struct {
-	Index    int       `json:"index"`
-	Repo     string    `json:"repo"`
-	Path     string    `json:"path"`
-	Branch   string    `json:"branch"`
-	State    State     `json:"state"`
-	Owner    string    `json:"owner,omitempty"`
-	OwnerPID int       `json:"ownerPid,omitempty"`
-	Created  time.Time `json:"created"`
-	Used     time.Time `json:"used"`
+	Index    int    `json:"index"`
+	Repo     string `json:"repo"`
+	Path     string `json:"path"`
+	Branch   string `json:"branch"`
+	State    State  `json:"state"`
+	Owner    string `json:"owner,omitempty"`
+	OwnerPID int    `json:"ownerPid,omitempty"`
+	// OwnerStart is when the holding process started. With OwnerPID it names
+	// one process, so a lease can tell its holder has exited even after the PID
+	// is reused. Empty on leases written before holders were recorded, whose
+	// OwnerPID was wt's own and says nothing about the session.
+	OwnerStart string    `json:"ownerStart,omitempty"`
+	Created    time.Time `json:"created"`
+	Used       time.Time `json:"used"`
 }
 
 // Recyclable reports whether a slot may be torn down to make room.
