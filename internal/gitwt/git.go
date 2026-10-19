@@ -350,9 +350,10 @@ func (g *Git) Add(path, branch, base string) error {
 
 // Remove tears down a worktree and prunes the administrative entry.
 //
-// It never passes --force: every reason git would need forcing is a reason the
-// pool should have refused the removal higher up, and a --force here would
-// silently undo those checks.
+// Git refuses to remove a worktree that has an initialised submodule, however
+// clean it is. When the plain removal fails, --force is used only after Dirty
+// and Unpushed both answer no, so the force never overrides a reason the pool
+// would have refused the removal for.
 func (g *Git) Remove(path string) error {
 	if path == "" {
 		return nil
@@ -362,10 +363,26 @@ func (g *Git) Remove(path string) error {
 		return nil
 	}
 	if _, err := g.run(g.Repo, "worktree", "remove", path); err != nil {
-		return err
+		if !g.safeToForce(path) {
+			return err
+		}
+		if _, forced := g.run(g.Repo, "worktree", "remove", "--force", path); forced != nil {
+			return forced
+		}
 	}
 	_, _ = g.run(g.Repo, "worktree", "prune")
 	return nil
+}
+
+// safeToForce is true only when nothing in the worktree is uncommitted and no
+// commit in it exists nowhere else. A failed check counts as not safe.
+func (g *Git) safeToForce(path string) bool {
+	dirty, err := g.Dirty(path)
+	if err != nil || dirty {
+		return false
+	}
+	unpushed, err := g.Unpushed(path)
+	return err == nil && !unpushed
 }
 
 // DefaultBase is the ref new branches are cut from.

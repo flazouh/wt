@@ -174,3 +174,72 @@ func commit(t *testing.T, dir, message string) {
 		}
 	}
 }
+
+func gitIn(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-c", "protocol.file.allow=always"}, args...)...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+func worktreeWithSubmodule(t *testing.T) (*Git, string) {
+	t.Helper()
+	g, dir := repo(t)
+	sub := t.TempDir()
+	gitIn(t, sub, "init", "-q", "-b", "main")
+	gitIn(t, sub, "config", "user.email", "t@example.com")
+	gitIn(t, sub, "config", "user.name", "T")
+	write(t, sub, "s.txt", "sub\n")
+	gitIn(t, sub, "add", "-A")
+	gitIn(t, sub, "commit", "-qm", "sub")
+	gitIn(t, dir, "submodule", "add", "-q", sub, "vendor")
+	gitIn(t, dir, "commit", "-qm", "add submodule")
+
+	work := filepath.Join(t.TempDir(), "wt")
+	if err := g.Add(work, "feature/sub", "main"); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	gitIn(t, work, "submodule", "update", "--init", "-q")
+	return g, work
+}
+
+// git refuses to remove any worktree that has an initialised submodule, even a
+// clean one. Without this the pool cannot recycle a slot of such a repository.
+func TestRemoveTakesDownACleanWorktreeThatHasASubmodule(t *testing.T) {
+	g, work := worktreeWithSubmodule(t)
+
+	if err := g.Remove(work); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if _, err := os.Stat(work); !os.IsNotExist(err) {
+		t.Fatalf("the worktree is still on disk: %v", err)
+	}
+}
+
+func TestRemoveRefusesADirtyWorktreeThatHasASubmodule(t *testing.T) {
+	g, work := worktreeWithSubmodule(t)
+	write(t, work, "scratch.txt", "not saved anywhere\n")
+
+	if err := g.Remove(work); err == nil {
+		t.Fatal("a worktree with uncommitted files was removed")
+	}
+	if _, err := os.Stat(filepath.Join(work, "scratch.txt")); err != nil {
+		t.Fatalf("the uncommitted file was lost: %v", err)
+	}
+}
+
+func TestRemoveRefusesAWorktreeWithAnUnpushedCommitThatHasASubmodule(t *testing.T) {
+	g, work := worktreeWithSubmodule(t)
+	write(t, work, "new.txt", "work\n")
+	commit(t, work, "a commit only this branch has")
+
+	if err := g.Remove(work); err == nil {
+		t.Fatal("a worktree holding a commit that exists nowhere else was removed")
+	}
+	if _, err := os.Stat(work); err != nil {
+		t.Fatalf("the worktree is gone: %v", err)
+	}
+}
