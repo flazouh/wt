@@ -15,7 +15,19 @@ type activity struct {
 	touchErr map[string]error
 	inUse    map[string]bool
 	probeErr error
+	// gone lists the owner PIDs whose process has exited; ownerErr makes the
+	// process table unreadable.
+	gone     map[int]bool
+	ownerErr error
 	asked    []string
+}
+
+func (a *activity) OwnerAlive(pid int, start time.Time) (bool, error) {
+	a.asked = append(a.asked, "owner:"+start.String())
+	if a.ownerErr != nil {
+		return false, a.ownerErr
+	}
+	return !a.gone[pid], nil
 }
 
 func (a *activity) LastTouched(path string) (time.Time, error) {
@@ -217,5 +229,133 @@ func TestALeaseWithNoWorktreeYetIsKept(t *testing.T) {
 
 	if released := p.ReleaseStale(world, now); len(released) != 0 {
 		t.Fatalf("released %v, a lease whose worktree was never built", released)
+	}
+}
+
+// ownedPool is a full pool of leases that each record the process holding them,
+// with slot 1 last used, and last touched in git, an hour before now.
+func ownedPool(t *testing.T, now time.Time) (*Pool, *activity) {
+	t.Helper()
+	p, world := leasedPool(t, now)
+	for _, s := range p.Slots {
+		s.OwnerPID = 100 + s.Index
+		s.OwnerStart = now.Add(-24 * time.Hour)
+		s.Used = now.Add(-5 * time.Minute)
+		world.touched[s.Path] = s.Used
+	}
+	p.Slots[0].Used = now.Add(-time.Hour)
+	world.touched[p.Slots[0].Path] = now.Add(-time.Hour)
+	world.gone = map[int]bool{}
+	return p, world
+}
+
+// The failure this exists for: twenty of twenty slots leased, every holder a
+// session that had exited hours before, and every take refused because the
+// two-day rule had not come round yet.
+func TestALeaseWhoseOwnerExitedIsReleasedWithoutWaitingTwoDays(t *testing.T) {
+	now := epoch
+	p, world := ownedPool(t, now)
+	world.gone[p.Slots[0].OwnerPID] = true
+
+	released := p.ReleaseStale(world, now)
+
+	if len(released) != 1 || released[0].Index != 1 {
+		t.Fatalf("released %v, want only slot 1", released)
+	}
+	if !released[0].OwnerGone {
+		t.Error("the release does not say the owner exited")
+	}
+	s := p.Slots[0]
+	if s.State != Idle || s.OwnerPID != 0 || !s.OwnerStart.IsZero() {
+		t.Fatalf("slot 1 is %s pid %d start %q, want idle with no owner", s.State, s.OwnerPID, s.OwnerStart)
+	}
+}
+
+func TestALiveOwnerKeepsItsLease(t *testing.T) {
+	now := epoch
+	p, world := ownedPool(t, now)
+
+	if released := p.ReleaseStale(world, now); len(released) != 0 {
+		t.Fatalf("released %v while every owner is running", released)
+	}
+}
+
+// An owner that exited moments ago may be a wrapper the holder detection got
+// wrong while the agent works on. A short grace costs one slot for half an
+// hour; handing a live agent's worktree to someone else costs its work.
+func TestAnExitedOwnerIsGivenAGracePeriod(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		idle  time.Duration
+		freed bool
+	}{
+		{"exactly the grace", OwnerGoneGrace, false},
+		{"one second past it", OwnerGoneGrace + time.Second, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := epoch
+			p, world := ownedPool(t, now)
+			world.gone[p.Slots[0].OwnerPID] = true
+			world.touched[p.Slots[0].Path] = now.Add(-tc.idle)
+
+			released := p.ReleaseStale(world, now)
+
+			if freed := len(released) == 1; freed != tc.freed {
+				t.Fatalf("idle %v: released %v, want freed=%v", tc.idle, released, tc.freed)
+			}
+		})
+	}
+}
+
+func TestAnExitedOwnerWithAProcessStillInsideKeepsItsLease(t *testing.T) {
+	now := epoch
+	p, world := ownedPool(t, now)
+	world.gone[p.Slots[0].OwnerPID] = true
+	world.inUse = map[string]bool{p.Slots[0].Path: true}
+
+	if released := p.ReleaseStale(world, now); len(released) != 0 {
+		t.Fatalf("released %v with a process working in it", released)
+	}
+}
+
+func TestAnUnreadableProcessTableKeepsEveryLease(t *testing.T) {
+	now := epoch
+	p, world := ownedPool(t, now)
+	world.gone[p.Slots[0].OwnerPID] = true
+	world.ownerErr = errors.New("ps printed nothing")
+
+	if released := p.ReleaseStale(world, now); len(released) != 0 {
+		t.Fatalf("released %v without knowing whether the owner runs", released)
+	}
+}
+
+// Leases written before owners were recorded hold the PID of wt itself, which
+// exits at once. That PID says nothing about the session, so those leases stay
+// on the two-day rule and the process table is not even asked.
+func TestALeaseWithNoRecordedStartKeepsTheTwoDayRule(t *testing.T) {
+	now := epoch
+	p, world := ownedPool(t, now)
+	p.Slots[0].OwnerStart = time.Time{}
+	world.gone[p.Slots[0].OwnerPID] = true
+
+	if released := p.ReleaseStale(world, now); len(released) != 0 {
+		t.Fatalf("released %v on a PID that was never the holder", released)
+	}
+	for _, q := range world.asked {
+		if q == "owner:"+(time.Time{}).String() {
+			t.Fatalf("asked the process table about a lease with no recorded owner: %v", world.asked)
+		}
+	}
+}
+
+func TestReleaseForgetsTheOwner(t *testing.T) {
+	now := epoch
+	p, _ := ownedPool(t, now)
+
+	if err := p.Release(1, now); err != nil {
+		t.Fatal(err)
+	}
+	if s := p.Slots[0]; s.OwnerPID != 0 || !s.OwnerStart.IsZero() {
+		t.Fatalf("released slot keeps pid %d start %q", s.OwnerPID, s.OwnerStart)
 	}
 }

@@ -55,7 +55,7 @@ func full(t *testing.T) *Pool {
 func TestCreatesUpToTheLimitAndNoFurther(t *testing.T) {
 	p := &Pool{Repo: "/repo"}
 	for i := 1; i <= DefaultLimit; i++ {
-		plan, err := p.Acquire("b"+string(rune('0'+i)), "agent", 1, safeWorld{}, epoch)
+		plan, err := p.Acquire("b"+string(rune('0'+i)), "agent", Holder{PID: 1}, safeWorld{}, epoch)
 		if err != nil {
 			t.Fatalf("acquire %d: %v", i, err)
 		}
@@ -77,7 +77,7 @@ func TestCreatesUpToTheLimitAndNoFurther(t *testing.T) {
 	}
 
 	// The sixth must recycle rather than grow the pool.
-	plan, err := p.Acquire("b6", "agent", 1, safeWorld{}, epoch.Add(time.Hour))
+	plan, err := p.Acquire("b6", "agent", Holder{PID: 1}, safeWorld{}, epoch.Add(time.Hour))
 	if err != nil {
 		t.Fatalf("sixth acquire: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestReusesAnIdleSlotAlreadyOnTheBranch(t *testing.T) {
 	p := full(t)
 	p.Slots[2].Branch = "feature/x"
 
-	plan, err := p.Acquire("feature/x", "agent", 1, safeWorld{}, epoch)
+	plan, err := p.Acquire("feature/x", "agent", Holder{PID: 1}, safeWorld{}, epoch)
 	if err != nil {
 		t.Fatalf("acquire: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestReusesAnIdleSlotAlreadyOnTheBranch(t *testing.T) {
 func TestRecyclesTheLeastRecentlyUsed(t *testing.T) {
 	p := full(t)
 
-	plan, err := p.Acquire("new", "agent", 1, safeWorld{}, epoch)
+	plan, err := p.Acquire("new", "agent", Holder{PID: 1}, safeWorld{}, epoch)
 	if err != nil {
 		t.Fatalf("acquire: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestNeverRecyclesWorkThatWouldBeLost(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			p := full(t)
 
-			plan, err := p.Acquire("new", "agent", 1, tc.world, epoch)
+			plan, err := p.Acquire("new", "agent", Holder{PID: 1}, tc.world, epoch)
 			if err != nil {
 				t.Fatalf("acquire: %v", err)
 			}
@@ -159,7 +159,7 @@ func TestNeverRecyclesALeasedOrPinnedSlot(t *testing.T) {
 	p.Slots[0].Owner = "codex"
 	p.Slots[1].State = Pinned
 
-	plan, err := p.Acquire("new", "agent", 1, safeWorld{}, epoch)
+	plan, err := p.Acquire("new", "agent", Holder{PID: 1}, safeWorld{}, epoch)
 	if err != nil {
 		t.Fatalf("acquire: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestNeverRecyclesALeasedOrPinnedSlot(t *testing.T) {
 func TestRefusesToGuessWhenSafetyCannotBeDetermined(t *testing.T) {
 	p := full(t)
 
-	_, err := p.Acquire("new", "agent", 1, blind{}, epoch)
+	_, err := p.Acquire("new", "agent", Holder{PID: 1}, blind{}, epoch)
 
 	if err == nil {
 		t.Fatal("acquire succeeded while the liveness probe was broken")
@@ -192,7 +192,7 @@ func TestAFullPoolSaysWhichLeaseToEnd(t *testing.T) {
 		s.Owner = "agent-" + string(rune('a'+i))
 	}
 
-	_, err := p.Acquire("new", "agent", 1, safeWorld{}, epoch)
+	_, err := p.Acquire("new", "agent", Holder{PID: 1}, safeWorld{}, epoch)
 
 	var isFull *ErrFull
 	if !errors.As(err, &isFull) {
@@ -242,7 +242,7 @@ func TestReleasingAPinnedSlotDoesNothing(t *testing.T) {
 func TestAcquireRequiresABranch(t *testing.T) {
 	p := &Pool{Repo: "/repo"}
 
-	if _, err := p.Acquire("", "agent", 1, safeWorld{}, epoch); err == nil {
+	if _, err := p.Acquire("", "agent", Holder{PID: 1}, safeWorld{}, epoch); err == nil {
 		t.Fatal("acquire accepted an empty branch")
 	}
 }
@@ -250,7 +250,7 @@ func TestAcquireRequiresABranch(t *testing.T) {
 func TestLimitOverridesTheDefault(t *testing.T) {
 	p := &Pool{Repo: "/repo", Limit: DefaultLimit + 3}
 	for i := 1; i <= p.Cap(); i++ {
-		plan, err := p.Acquire(fmt.Sprintf("b%d", i), "agent", 1, safeWorld{}, epoch)
+		plan, err := p.Acquire(fmt.Sprintf("b%d", i), "agent", Holder{PID: 1}, safeWorld{}, epoch)
 		if err != nil {
 			t.Fatalf("acquire %d: %v", i, err)
 		}
@@ -265,7 +265,7 @@ func TestLimitOverridesTheDefault(t *testing.T) {
 	for _, s := range p.Slots {
 		s.State = Pinned
 	}
-	_, err := p.Acquire("one-more", "agent", 1, safeWorld{}, epoch)
+	_, err := p.Acquire("one-more", "agent", Holder{PID: 1}, safeWorld{}, epoch)
 	var full *ErrFull
 	if !errors.As(err, &full) {
 		t.Fatalf("got %v, want ErrFull", err)

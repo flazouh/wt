@@ -62,7 +62,7 @@ func TestAcquireCreatesTheWorktreeOnDisk(t *testing.T) {
 	g := &fakeGit{}
 	s := service(t, &Pool{Repo: "/repo"}, g, safeWorld{})
 
-	slot, action, err := s.Acquire("feature/x", "agent", 1)
+	slot, action, err := s.Acquire("feature/x", "agent", Holder{PID: 1})
 	if err != nil {
 		t.Fatalf("acquire: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestRecycleRemovesBeforeItAdds(t *testing.T) {
 	}
 	s := service(t, p, g, safeWorld{})
 
-	_, action, err := s.Acquire("feature/new", "agent", 1)
+	_, action, err := s.Acquire("feature/new", "agent", Holder{PID: 1})
 	if err != nil {
 		t.Fatalf("acquire: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestRecycleStopsWhenTheOldWorktreeWillNotGo(t *testing.T) {
 	g := &fakeGit{remErr: errors.New("worktree is locked")}
 	s := service(t, p, g, safeWorld{})
 
-	_, _, err := s.Acquire("feature/new", "agent", 1)
+	_, _, err := s.Acquire("feature/new", "agent", Holder{PID: 1})
 
 	if err == nil {
 		t.Fatal("acquire succeeded despite the removal failing")
@@ -127,7 +127,7 @@ func TestReuseTouchesNothingOnDisk(t *testing.T) {
 	g := &fakeGit{}
 	s := service(t, p, g, safeWorld{})
 
-	_, action, err := s.Acquire("feature/x", "agent", 1)
+	_, action, err := s.Acquire("feature/x", "agent", Holder{PID: 1})
 	if err != nil {
 		t.Fatalf("acquire: %v", err)
 	}
@@ -208,7 +208,7 @@ func TestReconcileReleasesAStaleLeaseSoTheNextTakeCanRecycleIt(t *testing.T) {
 		t.Fatalf("released %v, want slot 1", r.Released)
 	}
 
-	slot, action, err := s.Acquire("feature/new", "agent", 1)
+	slot, action, err := s.Acquire("feature/new", "agent", Holder{PID: 1})
 	if err != nil {
 		t.Fatalf("acquire after release: %v", err)
 	}
@@ -242,7 +242,7 @@ func TestAReleasedLeaseStillPassesEveryRecycleCheck(t *testing.T) {
 				t.Fatalf("released %v, want slot 1", r.Released)
 			}
 
-			_, _, err = s.Acquire("feature/new", "agent", 1)
+			_, _, err = s.Acquire("feature/new", "agent", Holder{PID: 1})
 
 			var isFull *ErrFull
 			if !errors.As(err, &isFull) {

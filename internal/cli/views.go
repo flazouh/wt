@@ -126,11 +126,11 @@ func releasedTable(d *toon.Doc, released []pool.Released) {
 	}
 	rows := make([][]any, 0, len(released))
 	for _, r := range released {
-		rows = append(rows, []any{
-			r.Index,
-			r.Owner,
-			"lease released: idle " + span(r.Idle) + ", no live process",
-		})
+		why := "lease released: idle " + span(r.Idle) + ", no live process"
+		if r.OwnerGone {
+			why = "lease released: holder exited, idle " + span(r.Idle) + ", no live process"
+		}
+		rows = append(rows, []any{r.Index, r.Owner, why})
 	}
 	d.Table("released", []string{"slot", "owner", "why"}, rows)
 }
