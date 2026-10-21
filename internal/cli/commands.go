@@ -209,11 +209,6 @@ func (s safety) Unpushed(path string) (bool, error) {
 	return true, nil
 }
 
-// noWorktrees names the repositories that work in one shared checkout. Each
-// pooled worktree of atelier grew its own 20 to 100 GB cargo target and filled
-// the disk, so `wt take` refuses them by checkout name.
-var noWorktrees = map[string]bool{"atelier": true}
-
 func take(w io.Writer, flags map[string]string, rest []string) int {
 	if len(rest) == 0 {
 		return errorf(w, Usage, "take needs a branch", "usage: wt take <branch>")
@@ -223,11 +218,6 @@ func take(w io.Writer, flags map[string]string, rest []string) int {
 	s, err := open()
 	if err != nil {
 		return errorf(w, Fail, err.Error(), "run `wt` from inside a git repository")
-	}
-
-	if noWorktrees[filepath.Base(s.git.Repo)] {
-		return errorf(w, Fail, "this repository takes no worktrees",
-			"work in the one shared checkout, commit straight to main and push (see the repo's AGENTS.md)")
 	}
 
 	owner := flags["owner"]
