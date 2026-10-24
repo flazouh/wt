@@ -49,11 +49,26 @@ func (p *Probe) InUse(path string) (bool, error) {
 		return false, nil
 	}
 	for _, candidate := range p.paths {
-		if strings.Contains(candidate, path) {
+		if mentionsPath(candidate, path) {
 			return true, nil
 		}
 	}
 	return false, nil
+}
+
+// mentionsPath matches path as a whole, so .../slot-1 does not match .../slot-17.
+func mentionsPath(candidate, path string) bool {
+	for rest := candidate; ; {
+		i := strings.Index(rest, path)
+		if i < 0 {
+			return false
+		}
+		end := i + len(path)
+		if end == len(rest) || rest[end] == '/' || rest[end] == ' ' || rest[end] == 0 {
+			return true
+		}
+		rest = rest[end:]
+	}
 }
 
 func (p *Probe) load() error {
